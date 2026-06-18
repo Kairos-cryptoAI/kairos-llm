@@ -1,30 +1,45 @@
-"""Map a logical reasoning effort to a concrete model + provider effort.
+"""Map a logical reasoning effort to a concrete provider + model.
 
-The defaults implement the spec's cost-optimised split: cheap models carry the
-routine flow (Text Scouts / Aggregator-Normal), the flagship is reserved for
-``high`` and ``xhigh`` (conflict resolution, macro strategy).
+The defaults implement the architecture's **DeepSeek-first + GPT escalation**
+split: cheap DeepSeek models carry the routine flow (Text Scouts on Flash,
+Aggregator-Normal on Pro), while GPT-5.5 is reserved for ``high`` and ``xhigh``
+(conflict resolution, macro strategy) where the cost of error is highest.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict
+from enum import Enum
+from typing import Dict, Optional
 
 from kairos_core.enums import ReasoningEffort
+
+
+class Provider(str, Enum):
+    """LLM provider behind a model choice."""
+
+    DEEPSEEK = "deepseek"
+    OPENAI = "openai"
 
 
 @dataclass(frozen=True)
 class ModelChoice:
     model: str
-    provider_effort: str  # value passed to the provider's reasoning_effort
+    provider: Provider
+    # reasoning.effort value passed to the provider, or ``None`` for a
+    # non-thinking call (DeepSeek Flash/Pro must NOT receive this parameter).
+    provider_effort: Optional[str] = None
+
+    @property
+    def send_reasoning_effort(self) -> bool:
+        return self.provider_effort is not None
 
 
-# xhigh is a Kairos label; real providers cap at "high", so we map it there but
-# keep the logical effort for routing/accounting.
+# DeepSeek-first + GPT escalation (see the updated architecture document).
 DEFAULT_MAP: Dict[ReasoningEffort, ModelChoice] = {
-    ReasoningEffort.LOW: ModelChoice("gpt-5.5-mini", "low"),
-    ReasoningEffort.MEDIUM: ModelChoice("gpt-5.5-mini", "medium"),
-    ReasoningEffort.HIGH: ModelChoice("gpt-5.5", "high"),
-    ReasoningEffort.XHIGH: ModelChoice("gpt-5.5", "high"),
+    ReasoningEffort.LOW:    ModelChoice("deepseek-v4-flash", Provider.DEEPSEEK),         # non-thinking
+    ReasoningEffort.MEDIUM: ModelChoice("deepseek-v4-pro",   Provider.DEEPSEEK),         # non-thinking
+    ReasoningEffort.HIGH:   ModelChoice("gpt-5.5",           Provider.OPENAI, "high"),
+    ReasoningEffort.XHIGH:  ModelChoice("gpt-5.5",           Provider.OPENAI, "xhigh"),
 }
 
 
@@ -35,5 +50,6 @@ class ModelRouter:
     def choose(self, effort: ReasoningEffort) -> ModelChoice:
         return self._map[effort]
 
-    def override(self, effort: ReasoningEffort, model: str, provider_effort: str) -> None:
-        self._map[effort] = ModelChoice(model, provider_effort)
+    def override(self, effort: ReasoningEffort, model: str, provider: Provider,
+                 provider_effort: Optional[str] = None) -> None:
+        self._map[effort] = ModelChoice(model, provider, provider_effort)

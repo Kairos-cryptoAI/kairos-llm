@@ -13,13 +13,14 @@ __version__ = "0.1.0"
 
 from .schemas import LLMResult, TokenUsage
 from .pricing import PriceTable, CostAccountant
-from .models import ModelRouter
+from .models import ModelRouter, ModelChoice, Provider
 from .errors import LLMError, LLMTimeout, LLMServerError, LLMBadOutput
 from .gateway import LLMGateway
 from .config import LLMSettings
 
 __all__ = [
     "LLMResult", "TokenUsage", "PriceTable", "CostAccountant", "ModelRouter",
+    "ModelChoice", "Provider",
     "LLMError", "LLMTimeout", "LLMServerError", "LLMBadOutput", "LLMGateway",
     "LLMSettings", "__version__",
 ]
