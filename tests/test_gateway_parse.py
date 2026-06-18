@@ -72,3 +72,48 @@ def test_gpt_escalation_sends_reasoning_effort():
     asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.HIGH))  # -> gpt-5.5 high
     assert calls[0]["model"] == "gpt-5.5"
     assert calls[0]["reasoning_effort"] == "high"
+
+
+from kairos_llm.config import LLMSettings
+from kairos_llm.errors import LLMServerError, LLMTimeout
+
+
+class _FailingClient:
+    def __init__(self, status=None, timeout=False):
+        self._status = status
+        self._timeout = timeout
+        self.chat = SimpleNamespace(completions=self)
+
+    async def create(self, **kwargs):
+        if self._timeout:
+            raise asyncio.TimeoutError()
+        err = RuntimeError("boom")
+        err.status_code = self._status
+        raise err
+
+
+def test_health_hook_fires_on_success():
+    events = []
+    gw = LLMGateway(client=_FakeClient('{"x": 1}'), on_health=lambda *a: events.append(a))
+    asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.LOW))  # deepseek-v4-flash
+    assert events == [("deepseek-v4-flash", "deepseek", True, "ok", events[0][4])]
+    assert events[0][2] is True and events[0][3] == "ok"
+
+
+def test_health_hook_fires_on_5xx():
+    events = []
+    gw = LLMGateway(settings=LLMSettings(max_retries=0), client=_FailingClient(status=503),
+                    on_health=lambda *a: events.append(a))
+    with pytest.raises(LLMServerError):
+        asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.HIGH))  # gpt-5.5
+    model, provider, ok, kind, _ = events[-1]
+    assert (model, provider, ok, kind) == ("gpt-5.5", "openai", False, "5xx")
+
+
+def test_health_hook_fires_on_timeout():
+    events = []
+    gw = LLMGateway(settings=LLMSettings(max_retries=0), client=_FailingClient(timeout=True),
+                    on_health=lambda *a: events.append(a))
+    with pytest.raises(LLMTimeout):
+        asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.MEDIUM))  # deepseek-v4-pro
+    assert events[-1][2] is False and events[-1][3] == "timeout"

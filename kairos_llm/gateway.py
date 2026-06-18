@@ -14,9 +14,10 @@ for the GPT-5.5 escalation tier.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import time
-from typing import Any, Dict, Optional, Type
+from typing import Any, Callable, Dict, Optional, Type
 
 from pydantic import BaseModel, ValidationError
 
@@ -31,12 +32,14 @@ from .schemas import LLMResult, TokenUsage
 
 class LLMGateway:
     def __init__(self, settings: LLMSettings | None = None, *, router: ModelRouter | None = None,
-                 accountant: CostAccountant | None = None, client: Any | None = None) -> None:
+                 accountant: CostAccountant | None = None, client: Any | None = None,
+                 on_health: Optional[Callable[..., Any]] = None) -> None:
         self.settings = settings or LLMSettings()
         self.router = router or ModelRouter()
         self.accountant = accountant or CostAccountant()
         self._injected_client = client            # tests inject one client used for every provider
         self._clients: Dict[Provider, Any] = {}   # lazily created, one per provider
+        self._on_health = on_health               # callback(model, provider, ok, kind, latency_s)
 
     def _client_for(self, provider: Provider):
         if self._injected_client is not None:
@@ -83,6 +86,7 @@ class LLMGateway:
                     kwargs["reasoning_effort"] = choice.provider_effort
                 resp = await client.chat.completions.create(**kwargs)
                 latency = time.monotonic() - t0
+                await self._emit_health(choice, ok=True, kind="ok", latency_s=latency)
                 return self._finish(resp, choice, effort, latency, schema)
             except asyncio.TimeoutError as exc:  # pragma: no cover - network
                 last_exc = LLMTimeout(str(exc))
@@ -90,6 +94,7 @@ class LLMGateway:
                 status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
                 last_exc = LLMServerError(str(exc)) if status and int(status) >= 500 else exc
             await asyncio.sleep(0.5 * (attempt + 1))
+        await self._emit_health(choice, ok=False, kind=self._failure_kind(last_exc), latency_s=0.0)
         raise last_exc if last_exc else LLMServerError("unknown error")
 
     def _finish(self, resp, choice, effort, latency, schema) -> LLMResult:
@@ -105,6 +110,22 @@ class LLMGateway:
         return LLMResult(content=content, parsed=parsed, model=choice.model,
                          effort=effort.value, usage=usage, cost_usd=cost,
                          latency_s=latency, cached=usage.cached_input_tokens > 0)
+
+    async def _emit_health(self, choice, *, ok: bool, kind: str, latency_s: float) -> None:
+        """Notify the optional health sink; supports sync or async callbacks."""
+        if self._on_health is None:
+            return
+        result = self._on_health(choice.model, choice.provider.value, ok, kind, latency_s)
+        if inspect.isawaitable(result):
+            await result
+
+    @staticmethod
+    def _failure_kind(exc) -> str:
+        if isinstance(exc, LLMTimeout):
+            return "timeout"
+        if isinstance(exc, LLMServerError):
+            return "5xx"
+        return "error"
 
     @staticmethod
     def _usage_from(resp) -> TokenUsage:
