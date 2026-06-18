@@ -1,18 +1,22 @@
 """The async gateway every layer uses to call an LLM.
 
 Responsibilities:
-  * pick the model from the reasoning effort,
+  * pick the provider + model from the reasoning effort,
   * enforce a hard timeout and a small retry budget,
   * parse + (optionally) validate JSON output,
   * account for token spend,
   * raise typed errors so the Risk Manager breaker can react to 5xx/timeouts.
+
+DeepSeek-first: routine calls go to DeepSeek (Flash/Pro) as *non-thinking*
+requests — the ``reasoning_effort`` parameter is omitted for them and only sent
+for the GPT-5.5 escalation tier.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import time
-from typing import Any, List, Optional, Type
+from typing import Any, Dict, Optional, Type
 
 from pydantic import BaseModel, ValidationError
 
@@ -20,7 +24,7 @@ from kairos_core.enums import ReasoningEffort
 
 from .config import LLMSettings
 from .errors import LLMBadOutput, LLMServerError, LLMTimeout
-from .models import ModelRouter
+from .models import ModelRouter, Provider
 from .pricing import CostAccountant
 from .schemas import LLMResult, TokenUsage
 
@@ -31,19 +35,26 @@ class LLMGateway:
         self.settings = settings or LLMSettings()
         self.router = router or ModelRouter()
         self.accountant = accountant or CostAccountant()
-        self._client = client  # injectable for tests; lazily created otherwise
+        self._injected_client = client            # tests inject one client used for every provider
+        self._clients: Dict[Provider, Any] = {}   # lazily created, one per provider
 
-    def _ensure_client(self):
-        if self._client is None:
+    def _client_for(self, provider: Provider):
+        if self._injected_client is not None:
+            return self._injected_client
+        if provider not in self._clients:
             from openai import AsyncOpenAI  # imported lazily so tests need no key
 
-            self._client = AsyncOpenAI(
-                api_key=self.settings.openai_api_key,
-                base_url=self.settings.openai_base_url,
+            if provider is Provider.DEEPSEEK:
+                api_key, base_url = self.settings.deepseek_api_key, self.settings.deepseek_base_url
+            else:
+                api_key, base_url = self.settings.openai_api_key, self.settings.openai_base_url
+            self._clients[provider] = AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url,
                 timeout=self.settings.request_timeout_s,
                 max_retries=0,  # we own the retry loop
             )
-        return self._client
+        return self._clients[provider]
 
     async def complete(
         self,
@@ -54,19 +65,23 @@ class LLMGateway:
         schema: Optional[Type[BaseModel]] = None,
     ) -> LLMResult:
         choice = self.router.choose(effort)
-        client = self._ensure_client()
+        client = self._client_for(choice.provider)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
         last_exc: Optional[Exception] = None
         for attempt in range(self.settings.max_retries + 1):
             t0 = time.monotonic()
             try:
-                resp = await client.chat.completions.create(
+                kwargs: Dict[str, Any] = dict(
                     model=choice.model,
                     messages=messages,
                     response_format={"type": "json_object"},
-                    reasoning_effort=choice.provider_effort,
                 )
+                # Only the GPT-5.5 escalation tier is a thinking model; DeepSeek
+                # Flash/Pro run non-thinking and must NOT receive this parameter.
+                if choice.send_reasoning_effort:
+                    kwargs["reasoning_effort"] = choice.provider_effort
+                resp = await client.chat.completions.create(**kwargs)
                 latency = time.monotonic() - t0
                 return self._finish(resp, choice, effort, latency, schema)
             except asyncio.TimeoutError as exc:  # pragma: no cover - network
