@@ -1,10 +1,14 @@
 """Token pricing and running cost accounting.
 
-Default prices follow the GPT-5.5 tariff from the system spec:
-  * input              $5.00  / 1M tokens
-  * cached input       $0.50  / 1M tokens
-  * output (incl. reasoning) $30.00 / 1M tokens
-Override per-model via :class:`PriceTable`.
+Prices follow the **DeepSeek-first + GPT escalation** standard list prices from
+the updated architecture document (per 1M tokens):
+
+  * DeepSeek-V4-Flash : $0.14 in  / $0.28 out   (Text Scouts)
+  * DeepSeek-V4-Pro   : $0.435 in / $0.87 out   (Aggregator-Normal)
+  * GPT-5.5           : $5.00 in  / $30.00 out, $0.50 cached  (escalation)
+
+The monthly base budget is computed without batch/priority and without cache
+hits, so DeepSeek cached input is priced the same as fresh input here.
 """
 from __future__ import annotations
 
@@ -21,14 +25,23 @@ class ModelPrice:
     output_per_m: float
 
 
-DEFAULT_PRICE = ModelPrice(input_per_m=5.0, cached_input_per_m=0.5, output_per_m=30.0)
-# Cheap models used for the routine flow in the cost-optimised configuration.
-MINI_PRICE = ModelPrice(input_per_m=0.15, cached_input_per_m=0.075, output_per_m=0.60)
+# GPT-5.5 escalation tier (also the fallback price for unknown models).
+GPT55_PRICE = ModelPrice(input_per_m=5.0, cached_input_per_m=0.5, output_per_m=30.0)
+DEFAULT_PRICE = GPT55_PRICE
+# DeepSeek routine tier (no cache discount assumed in the base budget).
+DEEPSEEK_FLASH_PRICE = ModelPrice(input_per_m=0.14, cached_input_per_m=0.14, output_per_m=0.28)
+DEEPSEEK_PRO_PRICE = ModelPrice(input_per_m=0.435, cached_input_per_m=0.435, output_per_m=0.87)
+
+DEFAULT_PRICES: Dict[str, ModelPrice] = {
+    "deepseek-v4-flash": DEEPSEEK_FLASH_PRICE,
+    "deepseek-v4-pro": DEEPSEEK_PRO_PRICE,
+    "gpt-5.5": GPT55_PRICE,
+}
 
 
 class PriceTable:
     def __init__(self, prices: Dict[str, ModelPrice] | None = None, default: ModelPrice = DEFAULT_PRICE) -> None:
-        self._prices = prices or {}
+        self._prices = dict(DEFAULT_PRICES) if prices is None else prices
         self._default = default
 
     def for_model(self, model: str) -> ModelPrice:
