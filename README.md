@@ -33,4 +33,4 @@ print(res.parsed, res.cost_usd, res.model)
 | xhigh | gpt-5.5 | Macro-Strategist, regime change |
 
 ---
-Part of the [Kairos](https://github.com/TheLitis/kairos) system. MIT licensed.
+Part of the [Kairos](https://github.com/Kairos-cryptoAI/kairos) system. MIT licensed.
