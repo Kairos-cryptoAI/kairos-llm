@@ -5,8 +5,9 @@ from types import SimpleNamespace
 import pytest
 
 from kairos_core.enums import ReasoningEffort
+from kairos_llm.config import LLMSettings
 from kairos_llm.gateway import LLMGateway
-from kairos_llm.errors import LLMBadOutput
+from kairos_llm.errors import LLMBadOutput, LLMServerError, LLMTimeout
 
 
 class _FakeCompletions:
@@ -72,10 +73,6 @@ def test_gpt_escalation_sends_reasoning_effort():
     asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.HIGH))  # -> gpt-5.5 high
     assert calls[0]["model"] == "gpt-5.5"
     assert calls[0]["reasoning_effort"] == "high"
-
-
-from kairos_llm.config import LLMSettings
-from kairos_llm.errors import LLMServerError, LLMTimeout
 
 
 class _FailingClient:

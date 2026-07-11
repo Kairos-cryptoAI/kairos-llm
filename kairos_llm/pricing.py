@@ -40,7 +40,9 @@ DEFAULT_PRICES: Dict[str, ModelPrice] = {
 
 
 class PriceTable:
-    def __init__(self, prices: Dict[str, ModelPrice] | None = None, default: ModelPrice = DEFAULT_PRICE) -> None:
+    def __init__(
+        self, prices: Dict[str, ModelPrice] | None = None, default: ModelPrice = DEFAULT_PRICE
+    ) -> None:
         self._prices = dict(DEFAULT_PRICES) if prices is None else prices
         self._default = default
 

@@ -106,7 +106,7 @@ class LLMGateway:
             data = json.loads(content)
             parsed = schema.model_validate(data) if schema else data
         except (json.JSONDecodeError, ValidationError) as exc:
-            raise LLMBadOutput(str(exc))
+            raise LLMBadOutput(str(exc)) from exc
         return LLMResult(content=content, parsed=parsed, model=choice.model,
                          effort=effort.value, usage=usage, cost_usd=cost,
                          latency_s=latency, cached=usage.cached_input_tokens > 0)
