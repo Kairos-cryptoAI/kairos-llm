@@ -11,17 +11,18 @@ DeepSeek-first: routine calls go to DeepSeek (Flash/Pro) as *non-thinking*
 requests — the ``reasoning_effort`` parameter is omitted for them and only sent
 for the GPT-5.5 escalation tier.
 """
+
 from __future__ import annotations
 
 import asyncio
 import inspect
 import json
 import time
-from typing import Any, Callable, Dict, Optional, Type
-
-from pydantic import BaseModel, ValidationError
+from collections.abc import Callable
+from typing import Any
 
 from kairos_core.enums import ReasoningEffort
+from pydantic import BaseModel, ValidationError
 
 from .config import LLMSettings
 from .errors import LLMBadOutput, LLMServerError, LLMTimeout
@@ -31,15 +32,21 @@ from .schemas import LLMResult, TokenUsage
 
 
 class LLMGateway:
-    def __init__(self, settings: LLMSettings | None = None, *, router: ModelRouter | None = None,
-                 accountant: CostAccountant | None = None, client: Any | None = None,
-                 on_health: Optional[Callable[..., Any]] = None) -> None:
+    def __init__(
+        self,
+        settings: LLMSettings | None = None,
+        *,
+        router: ModelRouter | None = None,
+        accountant: CostAccountant | None = None,
+        client: Any | None = None,
+        on_health: Callable[..., Any] | None = None,
+    ) -> None:
         self.settings = settings or LLMSettings()
         self.router = router or ModelRouter()
         self.accountant = accountant or CostAccountant()
-        self._injected_client = client            # tests inject one client used for every provider
-        self._clients: Dict[Provider, Any] = {}   # lazily created, one per provider
-        self._on_health = on_health               # callback(model, provider, ok, kind, latency_s)
+        self._injected_client = client  # tests inject one client used for every provider
+        self._clients: dict[Provider, Any] = {}  # lazily created, one per provider
+        self._on_health = on_health  # callback(model, provider, ok, kind, latency_s)
 
     def _client_for(self, provider: Provider):
         if self._injected_client is not None:
@@ -47,6 +54,8 @@ class LLMGateway:
         if provider not in self._clients:
             from openai import AsyncOpenAI  # imported lazily so tests need no key
 
+            api_key: str | None
+            base_url: str | None
             if provider is Provider.DEEPSEEK:
                 api_key, base_url = self.settings.deepseek_api_key, self.settings.deepseek_base_url
             else:
@@ -65,17 +74,17 @@ class LLMGateway:
         system: str,
         user: str,
         effort: ReasoningEffort,
-        schema: Optional[Type[BaseModel]] = None,
+        schema: type[BaseModel] | None = None,
     ) -> LLMResult:
         choice = self.router.choose(effort)
         client = self._client_for(choice.provider)
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(self.settings.max_retries + 1):
             t0 = time.monotonic()
             try:
-                kwargs: Dict[str, Any] = dict(
+                kwargs: dict[str, Any] = dict(
                     model=choice.model,
                     messages=messages,
                     response_format={"type": "json_object"},
@@ -88,7 +97,7 @@ class LLMGateway:
                 latency = time.monotonic() - t0
                 await self._emit_health(choice, ok=True, kind="ok", latency_s=latency)
                 return self._finish(resp, choice, effort, latency, schema)
-            except asyncio.TimeoutError as exc:  # pragma: no cover - network
+            except TimeoutError as exc:  # pragma: no cover - network
                 last_exc = LLMTimeout(str(exc))
             except Exception as exc:  # pragma: no cover - network
                 status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
@@ -107,9 +116,16 @@ class LLMGateway:
             parsed = schema.model_validate(data) if schema else data
         except (json.JSONDecodeError, ValidationError) as exc:
             raise LLMBadOutput(str(exc)) from exc
-        return LLMResult(content=content, parsed=parsed, model=choice.model,
-                         effort=effort.value, usage=usage, cost_usd=cost,
-                         latency_s=latency, cached=usage.cached_input_tokens > 0)
+        return LLMResult(
+            content=content,
+            parsed=parsed,
+            model=choice.model,
+            effort=effort.value,
+            usage=usage,
+            cost_usd=cost,
+            latency_s=latency,
+            cached=usage.cached_input_tokens > 0,
+        )
 
     async def _emit_health(self, choice, *, ok: bool, kind: str, latency_s: float) -> None:
         """Notify the optional health sink; supports sync or async callbacks."""

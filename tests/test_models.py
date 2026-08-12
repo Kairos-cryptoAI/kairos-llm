@@ -1,4 +1,5 @@
 from kairos_core.enums import ReasoningEffort
+
 from kairos_llm.models import ModelRouter, Provider
 
 
@@ -8,6 +9,7 @@ def test_routine_flow_uses_deepseek():
     assert r.choose(ReasoningEffort.MEDIUM).model == "deepseek-v4-pro"
     assert r.choose(ReasoningEffort.LOW).provider is Provider.DEEPSEEK
     assert r.choose(ReasoningEffort.MEDIUM).provider is Provider.DEEPSEEK
+    assert str(Provider.DEEPSEEK) == "deepseek"
 
 
 def test_deepseek_routine_is_non_thinking():

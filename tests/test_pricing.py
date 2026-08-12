@@ -1,4 +1,4 @@
-from kairos_llm.pricing import PriceTable, CostAccountant
+from kairos_llm.pricing import CostAccountant, PriceTable
 from kairos_llm.schemas import TokenUsage
 
 

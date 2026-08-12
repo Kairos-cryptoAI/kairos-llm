@@ -10,10 +10,10 @@ the updated architecture document (per 1M tokens):
 The monthly base budget is computed without batch/priority and without cache
 hits, so DeepSeek cached input is priced the same as fresh input here.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict
 
 from .schemas import TokenUsage
 
@@ -32,7 +32,7 @@ DEFAULT_PRICE = GPT55_PRICE
 DEEPSEEK_FLASH_PRICE = ModelPrice(input_per_m=0.14, cached_input_per_m=0.14, output_per_m=0.28)
 DEEPSEEK_PRO_PRICE = ModelPrice(input_per_m=0.435, cached_input_per_m=0.435, output_per_m=0.87)
 
-DEFAULT_PRICES: Dict[str, ModelPrice] = {
+DEFAULT_PRICES: dict[str, ModelPrice] = {
     "deepseek-v4-flash": DEEPSEEK_FLASH_PRICE,
     "deepseek-v4-pro": DEEPSEEK_PRO_PRICE,
     "gpt-5.5": GPT55_PRICE,
@@ -41,7 +41,7 @@ DEFAULT_PRICES: Dict[str, ModelPrice] = {
 
 class PriceTable:
     def __init__(
-        self, prices: Dict[str, ModelPrice] | None = None, default: ModelPrice = DEFAULT_PRICE
+        self, prices: dict[str, ModelPrice] | None = None, default: ModelPrice = DEFAULT_PRICE
     ) -> None:
         self._prices = dict(DEFAULT_PRICES) if prices is None else prices
         self._default = default
@@ -64,7 +64,7 @@ class CostAccountant:
 
     table: PriceTable = field(default_factory=PriceTable)
     total_usd: float = 0.0
-    per_model: Dict[str, float] = field(default_factory=dict)
+    per_model: dict[str, float] = field(default_factory=dict)
     calls: int = 0
 
     def record(self, model: str, usage: TokenUsage) -> float:

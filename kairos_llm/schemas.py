@@ -1,8 +1,9 @@
 """Result / usage value objects returned by the gateway."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass(slots=True)
@@ -19,7 +20,7 @@ class TokenUsage:
 @dataclass(slots=True)
 class LLMResult:
     content: str
-    parsed: Optional[Any]
+    parsed: Any | None
     model: str
     effort: str
     usage: TokenUsage = field(default_factory=TokenUsage)

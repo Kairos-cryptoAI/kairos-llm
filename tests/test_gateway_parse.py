@@ -1,13 +1,14 @@
 """Gateway parsing/accounting with a fake OpenAI client (no network)."""
+
 import asyncio
 from types import SimpleNamespace
 
 import pytest
-
 from kairos_core.enums import ReasoningEffort
+
 from kairos_llm.config import LLMSettings
-from kairos_llm.gateway import LLMGateway
 from kairos_llm.errors import LLMBadOutput, LLMServerError, LLMTimeout
+from kairos_llm.gateway import LLMGateway
 
 
 class _FakeCompletions:
@@ -16,8 +17,11 @@ class _FakeCompletions:
 
     async def create(self, **kwargs):
         msg = SimpleNamespace(content=self._content)
-        usage = SimpleNamespace(prompt_tokens=1500, completion_tokens=300,
-                                prompt_tokens_details=SimpleNamespace(cached_tokens=750))
+        usage = SimpleNamespace(
+            prompt_tokens=1500,
+            completion_tokens=300,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=750),
+        )
         return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=usage)
 
 
@@ -49,8 +53,9 @@ class _RecordingCompletions:
     async def create(self, **kwargs):
         self._calls.append(kwargs)
         msg = SimpleNamespace(content=self._content)
-        usage = SimpleNamespace(prompt_tokens=1000, completion_tokens=200,
-                                prompt_tokens_details=SimpleNamespace(cached_tokens=0))
+        usage = SimpleNamespace(
+            prompt_tokens=1000, completion_tokens=200, prompt_tokens_details=SimpleNamespace(cached_tokens=0)
+        )
         return SimpleNamespace(choices=[SimpleNamespace(message=msg)], usage=usage)
 
 
@@ -62,7 +67,7 @@ class _RecordingClient:
 def test_deepseek_call_omits_reasoning_effort():
     calls = []
     gw = LLMGateway(client=_RecordingClient('{"ok": true}', calls))
-    asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.LOW))   # -> deepseek-v4-flash
+    asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.LOW))  # -> deepseek-v4-flash
     assert calls[0]["model"] == "deepseek-v4-flash"
     assert "reasoning_effort" not in calls[0]
 
@@ -83,7 +88,7 @@ class _FailingClient:
 
     async def create(self, **kwargs):
         if self._timeout:
-            raise asyncio.TimeoutError()
+            raise TimeoutError()
         err = RuntimeError("boom")
         err.status_code = self._status
         raise err
@@ -99,8 +104,11 @@ def test_health_hook_fires_on_success():
 
 def test_health_hook_fires_on_5xx():
     events = []
-    gw = LLMGateway(settings=LLMSettings(max_retries=0), client=_FailingClient(status=503),
-                    on_health=lambda *a: events.append(a))
+    gw = LLMGateway(
+        settings=LLMSettings(max_retries=0),
+        client=_FailingClient(status=503),
+        on_health=lambda *a: events.append(a),
+    )
     with pytest.raises(LLMServerError):
         asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.HIGH))  # gpt-5.5
     model, provider, ok, kind, _ = events[-1]
@@ -109,8 +117,11 @@ def test_health_hook_fires_on_5xx():
 
 def test_health_hook_fires_on_timeout():
     events = []
-    gw = LLMGateway(settings=LLMSettings(max_retries=0), client=_FailingClient(timeout=True),
-                    on_health=lambda *a: events.append(a))
+    gw = LLMGateway(
+        settings=LLMSettings(max_retries=0),
+        client=_FailingClient(timeout=True),
+        on_health=lambda *a: events.append(a),
+    )
     with pytest.raises(LLMTimeout):
         asyncio.run(gw.complete(system="s", user="u", effort=ReasoningEffort.MEDIUM))  # deepseek-v4-pro
     assert events[-1][2] is False and events[-1][3] == "timeout"
