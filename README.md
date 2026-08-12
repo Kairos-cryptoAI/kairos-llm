@@ -24,6 +24,19 @@ res = await gw.complete(system=SYSTEM_PROMPT, user=compact_json, effort=Reasonin
 print(res.parsed, res.cost_usd, res.model)
 ```
 
+## Local development
+
+```powershell
+winget install --id astral-sh.uv --exact
+uv sync --locked
+uv run --locked ruff check kairos_llm tests
+uv run --locked ruff format --check kairos_llm tests
+uv run --locked mypy kairos_llm
+uv run --locked bandit -q -r kairos_llm -x tests
+uv run --locked pytest -q --tb=short
+uv build --no-sources
+```
+
 ## Cost model
 | effort | default model | typical use |
 | --- | --- | --- |
