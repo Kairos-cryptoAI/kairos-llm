@@ -19,10 +19,10 @@ def test_deepseek_routine_is_non_thinking():
     assert r.choose(ReasoningEffort.MEDIUM).send_reasoning_effort is False
 
 
-def test_escalation_uses_gpt55():
+def test_escalation_uses_gpt56_sol():
     r = ModelRouter()
-    assert r.choose(ReasoningEffort.HIGH).model == "gpt-5.5"
-    assert r.choose(ReasoningEffort.XHIGH).model == "gpt-5.5"
+    assert r.choose(ReasoningEffort.HIGH).model == "gpt-5.6-sol"
+    assert r.choose(ReasoningEffort.XHIGH).model == "gpt-5.6-sol"
     assert r.choose(ReasoningEffort.HIGH).provider is Provider.OPENAI
 
 

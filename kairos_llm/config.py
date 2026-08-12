@@ -8,7 +8,7 @@ from kairos_core.config import CoreSettings
 class LLMSettings(CoreSettings):
     service_name: str = "kairos-llm"
 
-    # --- OpenAI: GPT-5.5 escalation tier (conflict resolution + macro strategy) ---
+    # --- OpenAI: GPT-5.6 Sol escalation tier (conflict resolution + macro strategy) ---
     openai_api_key: str | None = None  # KAIROS_OPENAI_API_KEY (or OPENAI_API_KEY)
     openai_base_url: str | None = None  # for OpenAI-compatible gateways
 
@@ -20,6 +20,7 @@ class LLMSettings(CoreSettings):
 
     request_timeout_s: float = 20.0
     max_retries: int = 2
+    max_output_tokens: int = 8_192
     # Server-side prompt caching is automatic; this just flags that our system
     # prompts are stable enough to benefit (used for accounting/estimates).
     assume_cached_system_prompt: bool = True

@@ -2,7 +2,7 @@
 
 The defaults implement the architecture's **DeepSeek-first + GPT escalation**
 split: cheap DeepSeek models carry the routine flow (Text Scouts on Flash,
-Aggregator-Normal on Pro), while GPT-5.5 is reserved for ``high`` and ``xhigh``
+Aggregator-Normal on Pro), while GPT-5.6 Sol is reserved for ``high`` and ``xhigh``
 (conflict resolution, macro strategy) where the cost of error is highest.
 """
 
@@ -25,8 +25,8 @@ class Provider(StrEnum):
 class ModelChoice:
     model: str
     provider: Provider
-    # reasoning.effort value passed to the provider, or ``None`` for a
-    # non-thinking call (DeepSeek Flash/Pro must NOT receive this parameter).
+    # OpenAI reasoning.effort value. DeepSeek routine calls disable thinking
+    # explicitly in the provider adapter instead of passing this field.
     provider_effort: str | None = None
 
     @property
@@ -38,8 +38,8 @@ class ModelChoice:
 DEFAULT_MAP: dict[ReasoningEffort, ModelChoice] = {
     ReasoningEffort.LOW: ModelChoice("deepseek-v4-flash", Provider.DEEPSEEK),  # non-thinking
     ReasoningEffort.MEDIUM: ModelChoice("deepseek-v4-pro", Provider.DEEPSEEK),  # non-thinking
-    ReasoningEffort.HIGH: ModelChoice("gpt-5.5", Provider.OPENAI, "high"),
-    ReasoningEffort.XHIGH: ModelChoice("gpt-5.5", Provider.OPENAI, "xhigh"),
+    ReasoningEffort.HIGH: ModelChoice("gpt-5.6-sol", Provider.OPENAI, "high"),
+    ReasoningEffort.XHIGH: ModelChoice("gpt-5.6-sol", Provider.OPENAI, "xhigh"),
 }
 
 
