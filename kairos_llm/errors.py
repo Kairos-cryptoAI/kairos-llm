@@ -1,4 +1,5 @@
 """Typed errors. Server/timeout errors are what trip the circuit breaker."""
+
 from __future__ import annotations
 
 

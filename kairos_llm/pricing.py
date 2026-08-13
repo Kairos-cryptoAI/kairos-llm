@@ -3,17 +3,17 @@
 Prices follow the **DeepSeek-first + GPT escalation** standard list prices from
 the updated architecture document (per 1M tokens):
 
-  * DeepSeek-V4-Flash : $0.14 in  / $0.28 out   (Text Scouts)
-  * DeepSeek-V4-Pro   : $0.435 in / $0.87 out   (Aggregator-Normal)
-  * GPT-5.5           : $5.00 in  / $30.00 out, $0.50 cached  (escalation)
+  * DeepSeek-V4-Flash : $0.14 in / $0.0028 cached / $0.28 out
+  * DeepSeek-V4-Pro   : $0.435 in / $0.003625 cached / $0.87 out
+  * GPT-5.6 Sol       : $5.00 in / $0.50 cached / $30.00 out
 
-The monthly base budget is computed without batch/priority and without cache
-hits, so DeepSeek cached input is priced the same as fresh input here.
+The monthly base budget is computed without batch/priority and assumes zero
+cache hits, so every input token in that estimate uses the cache-miss rate.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict
 
 from .schemas import TokenUsage
 
@@ -25,23 +25,23 @@ class ModelPrice:
     output_per_m: float
 
 
-# GPT-5.5 escalation tier (also the fallback price for unknown models).
-GPT55_PRICE = ModelPrice(input_per_m=5.0, cached_input_per_m=0.5, output_per_m=30.0)
-DEFAULT_PRICE = GPT55_PRICE
-# DeepSeek routine tier (no cache discount assumed in the base budget).
-DEEPSEEK_FLASH_PRICE = ModelPrice(input_per_m=0.14, cached_input_per_m=0.14, output_per_m=0.28)
-DEEPSEEK_PRO_PRICE = ModelPrice(input_per_m=0.435, cached_input_per_m=0.435, output_per_m=0.87)
+# GPT-5.6 Sol escalation tier (also the fallback price for unknown models).
+GPT56_PRICE = ModelPrice(input_per_m=5.0, cached_input_per_m=0.5, output_per_m=30.0)
+DEFAULT_PRICE = GPT56_PRICE
+DEEPSEEK_FLASH_PRICE = ModelPrice(input_per_m=0.14, cached_input_per_m=0.0028, output_per_m=0.28)
+DEEPSEEK_PRO_PRICE = ModelPrice(input_per_m=0.435, cached_input_per_m=0.003625, output_per_m=0.87)
 
-DEFAULT_PRICES: Dict[str, ModelPrice] = {
+DEFAULT_PRICES: dict[str, ModelPrice] = {
     "deepseek-v4-flash": DEEPSEEK_FLASH_PRICE,
     "deepseek-v4-pro": DEEPSEEK_PRO_PRICE,
-    "gpt-5.5": GPT55_PRICE,
+    "gpt-5.6": GPT56_PRICE,
+    "gpt-5.6-sol": GPT56_PRICE,
 }
 
 
 class PriceTable:
     def __init__(
-        self, prices: Dict[str, ModelPrice] | None = None, default: ModelPrice = DEFAULT_PRICE
+        self, prices: dict[str, ModelPrice] | None = None, default: ModelPrice = DEFAULT_PRICE
     ) -> None:
         self._prices = dict(DEFAULT_PRICES) if prices is None else prices
         self._default = default
@@ -64,7 +64,7 @@ class CostAccountant:
 
     table: PriceTable = field(default_factory=PriceTable)
     total_usd: float = 0.0
-    per_model: Dict[str, float] = field(default_factory=dict)
+    per_model: dict[str, float] = field(default_factory=dict)
     calls: int = 0
 
     def record(self, model: str, usage: TokenUsage) -> float:
