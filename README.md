@@ -11,6 +11,10 @@ to OpenAI directly — Text Scouts, the Aggregator and the Macro-Strategist all 
   cached) so budget alerts are trivial.
 - **Resilience.** Owns the timeout + retry budget and raises typed `LLMServerError` /
   `LLMTimeout` so the Risk Manager's **circuit breaker** can detach the LLM on 5xx/timeouts.
+  Retries are limited to connection/timeouts and explicitly transient HTTP responses
+  (`408`, `409`, `429`, and `5xx`). Authentication, bad-request, invalid structured-output,
+  and programming errors fail immediately. Health telemetry is best-effort and can never
+  repeat an otherwise successful, potentially billable provider call.
 - **Structured output.** OpenAI uses Responses API Structured Outputs with SDK-native
   Pydantic parsing. DeepSeek JSON is validated locally against the same schema.
 

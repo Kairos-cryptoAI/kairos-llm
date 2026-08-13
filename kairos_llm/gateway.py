@@ -12,11 +12,18 @@ import inspect
 import json
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from kairos_core.enums import ReasoningEffort
 from kairos_core.logging import get_logger
-from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIResponseValidationError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+)
 from pydantic import BaseModel, RootModel, ValidationError
 
 from .config import LLMSettings
@@ -30,6 +37,13 @@ log = get_logger(__name__)
 
 class _JsonObject(RootModel[dict[str, Any]]):
     """Fallback schema when a caller only needs an arbitrary JSON object."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Failure:
+    error: Exception
+    health_kind: str
+    retryable: bool
 
 
 class LLMGateway:
@@ -77,11 +91,9 @@ class LLMGateway:
     ) -> LLMResult:
         choice = self.router.choose(effort)
         client = self._client_for(choice.provider)
-        last_exc: Exception | None = None
-        last_kind = "error"
-        last_latency = 0.0
 
-        for attempt in range(self.settings.max_retries + 1):
+        max_retries = max(0, self.settings.max_retries)
+        for attempt in range(max_retries + 1):
             started = time.monotonic()
             try:
                 async with asyncio.timeout(self.settings.request_timeout_s):
@@ -94,37 +106,83 @@ class LLMGateway:
                 result.latency_s = time.monotonic() - started
                 await self._emit_health_safely(choice, ok=True, kind="ok", latency_s=result.latency_s)
                 return result
-            except (TimeoutError, APITimeoutError) as exc:
-                last_exc = LLMTimeout(str(exc) or "model request timed out")
-                last_kind = "timeout"
-            except APIConnectionError as exc:
-                last_exc = LLMServerError(str(exc))
-                last_kind = "connection"
-            except APIStatusError as exc:
-                if exc.status_code >= 500:
-                    last_exc = LLMServerError(str(exc))
-                    last_kind = "5xx"
-                else:
-                    last_exc = exc
-                    last_kind = "http_4xx"
-            except LLMBadOutput as exc:
-                last_exc = exc
-                last_kind = "bad_output"
-            except Exception as exc:  # provider-compatible clients may use custom errors
-                status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
-                if status and int(status) >= 500:
-                    last_exc = LLMServerError(str(exc))
-                    last_kind = "5xx"
-                else:
-                    last_exc = exc
-                    last_kind = "error"
+            except Exception as exc:
+                failure = self._classify_failure(exc)
+                latency = time.monotonic() - started
+                if failure.retryable and attempt < max_retries:
+                    # The SDK's own retries are disabled. Only the explicit transient
+                    # allow-list below may cause another potentially billable request.
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
 
-            last_latency = time.monotonic() - started
-            if attempt < self.settings.max_retries:
-                await asyncio.sleep(0.5 * (attempt + 1))
+                await self._emit_health_safely(
+                    choice,
+                    ok=False,
+                    kind=failure.health_kind,
+                    latency_s=latency,
+                )
+                if failure.error is exc:
+                    raise
+                raise failure.error from exc
 
-        await self._emit_health_safely(choice, ok=False, kind=last_kind, latency_s=last_latency)
-        raise last_exc if last_exc else LLMServerError("unknown model error")
+        raise LLMServerError("model request loop exited unexpectedly")  # pragma: no cover
+
+    @classmethod
+    def _classify_failure(cls, exc: Exception) -> _Failure:
+        """Classify failures conservatively so permanent errors never spend retry budget."""
+        if isinstance(exc, (TimeoutError, APITimeoutError)):
+            return _Failure(
+                LLMTimeout(str(exc) or "model request timed out"),
+                health_kind="timeout",
+                retryable=True,
+            )
+        if isinstance(exc, APIConnectionError):
+            return _Failure(
+                LLMServerError(str(exc) or "provider connection failed"),
+                health_kind="connection",
+                retryable=True,
+            )
+        if isinstance(exc, LLMBadOutput):
+            return _Failure(exc, health_kind="bad_output", retryable=False)
+        if isinstance(exc, (APIResponseValidationError, ValidationError, json.JSONDecodeError)):
+            return _Failure(LLMBadOutput(str(exc)), health_kind="bad_output", retryable=False)
+
+        status = cls._status_code(exc)
+        if isinstance(exc, APIStatusError) or status is not None:
+            return cls._classify_http_failure(exc, status)
+        return _Failure(exc, health_kind="error", retryable=False)
+
+    @staticmethod
+    def _status_code(exc: Exception) -> int | None:
+        raw_status = getattr(exc, "status_code", None)
+        if raw_status is None:
+            raw_status = getattr(exc, "status", None)
+        try:
+            return int(raw_status) if raw_status is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _classify_http_failure(exc: Exception, status: int | None) -> _Failure:
+        if status == 408:
+            return _Failure(
+                LLMTimeout(str(exc) or "provider request timed out"),
+                health_kind="timeout",
+                retryable=True,
+            )
+        if status == 409:
+            return _Failure(exc, health_kind="conflict", retryable=True)
+        if status == 429:
+            return _Failure(exc, health_kind="rate_limit", retryable=True)
+        if status is not None and status >= 500:
+            return _Failure(
+                LLMServerError(str(exc) or f"provider returned HTTP {status}"),
+                health_kind="5xx",
+                retryable=True,
+            )
+        if status is not None and 400 <= status < 500:
+            return _Failure(exc, health_kind="http_4xx", retryable=False)
+        return _Failure(exc, health_kind="http_error", retryable=False)
 
     async def _complete_openai(
         self,
