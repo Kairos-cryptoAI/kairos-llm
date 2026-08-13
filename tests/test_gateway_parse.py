@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from kairos_core.enums import ReasoningEffort
-from openai import APIConnectionError, AuthenticationError, BadRequestError
+from openai import APIConnectionError, APIStatusError, AuthenticationError, BadRequestError
 from pydantic import BaseModel
 
 from kairos_llm.config import LLMSettings
@@ -172,7 +172,7 @@ def test_health_hook_fires_on_5xx():
     events = []
     gateway = LLMGateway(
         settings=LLMSettings(max_retries=0),
-        client=_FakeClient("{}", error=_ProviderFailure(status=503)),
+        client=_FakeClient("{}", error=_sdk_status_error(APIStatusError, 503)),
         on_health=lambda *args: events.append(args),
     )
 
@@ -207,8 +207,8 @@ def _sdk_status_error(error_type, status_code):
     [
         _sdk_status_error(BadRequestError, 400),
         _sdk_status_error(AuthenticationError, 401),
-        _ProviderFailure(status=403),
-        _ProviderFailure(status=422),
+        _sdk_status_error(APIStatusError, 403),
+        _sdk_status_error(APIStatusError, 422),
     ],
     ids=["bad-request", "authentication", "forbidden", "unprocessable"],
 )
@@ -268,13 +268,30 @@ def test_programming_error_fails_fast():
     assert events[-1][2:4] == (False, "error")
 
 
+def test_status_shaped_programming_error_fails_fast():
+    events = []
+    error = _ProviderFailure(status=503)
+    client = _FakeClient("{}", error=error)
+    gateway = LLMGateway(
+        settings=LLMSettings(max_retries=3),
+        client=client,
+        on_health=lambda *args: events.append(args),
+    )
+
+    with pytest.raises(_ProviderFailure):
+        asyncio.run(gateway.complete(system="s", user="u", effort=ReasoningEffort.LOW))
+
+    assert len(client.chat_calls) == 1
+    assert events[-1][2:4] == (False, "error")
+
+
 @pytest.mark.parametrize(
     "error",
     [
-        _ProviderFailure(status=408),
-        _ProviderFailure(status=409),
-        _ProviderFailure(status=429),
-        _ProviderFailure(status=503),
+        _sdk_status_error(APIStatusError, 408),
+        _sdk_status_error(APIStatusError, 409),
+        _sdk_status_error(APIStatusError, 429),
+        _sdk_status_error(APIStatusError, 503),
     ],
     ids=["request-timeout", "lock-conflict", "rate-limit", "server-error"],
 )
@@ -328,7 +345,7 @@ def test_transient_failure_exhausts_retry_budget_and_emits_final_health(monkeypa
 
     monkeypatch.setattr(asyncio, "sleep", record_sleep)
     events = []
-    client = _FakeClient("{}", error=_ProviderFailure(status=503))
+    client = _FakeClient("{}", error=_sdk_status_error(APIStatusError, 503))
     gateway = LLMGateway(
         settings=LLMSettings(max_retries=2),
         client=client,
@@ -342,3 +359,52 @@ def test_transient_failure_exhausts_retry_budget_and_emits_final_health(monkeypa
     assert sleeps == [0.5, 1.0]
     assert len(events) == 1
     assert events[0][2:4] == (False, "5xx")
+
+
+def test_connection_failure_exhausts_budget_as_breaker_outage(monkeypatch):
+    sleeps = []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    events = []
+    request = httpx.Request("POST", "https://provider.invalid/v1/chat/completions")
+    client = _FakeClient("{}", error=APIConnectionError(request=request))
+    gateway = LLMGateway(
+        settings=LLMSettings(max_retries=2),
+        client=client,
+        on_health=lambda *args: events.append(args),
+    )
+
+    with pytest.raises(LLMServerError):
+        asyncio.run(gateway.complete(system="s", user="u", effort=ReasoningEffort.LOW))
+
+    assert len(client.chat_calls) == 3
+    assert sleeps == [0.5, 1.0]
+    assert len(events) == 1
+    assert events[0][2:4] == (False, "timeout")
+
+
+def test_nonstandard_sdk_status_does_not_retry(monkeypatch):
+    sleeps = []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", record_sleep)
+    events = []
+    error = _sdk_status_error(APIStatusError, 600)
+    client = _FakeClient("{}", error=error)
+    gateway = LLMGateway(
+        settings=LLMSettings(max_retries=3),
+        client=client,
+        on_health=lambda *args: events.append(args),
+    )
+
+    with pytest.raises(APIStatusError):
+        asyncio.run(gateway.complete(system="s", user="u", effort=ReasoningEffort.HIGH))
+
+    assert len(client.response_calls) == 1
+    assert sleeps == []
+    assert events[-1][2:4] == (False, "http_error")

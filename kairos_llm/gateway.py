@@ -139,7 +139,9 @@ class LLMGateway:
         if isinstance(exc, APIConnectionError):
             return _Failure(
                 LLMServerError(str(exc) or "provider connection failed"),
-                health_kind="connection",
+                # The shared health contract treats network unavailability as
+                # an outage only when it is reported as timeout or 5xx.
+                health_kind="timeout",
                 retryable=True,
             )
         if isinstance(exc, LLMBadOutput):
@@ -147,9 +149,8 @@ class LLMGateway:
         if isinstance(exc, (APIResponseValidationError, ValidationError, json.JSONDecodeError)):
             return _Failure(LLMBadOutput(str(exc)), health_kind="bad_output", retryable=False)
 
-        status = cls._status_code(exc)
-        if isinstance(exc, APIStatusError) or status is not None:
-            return cls._classify_http_failure(exc, status)
+        if isinstance(exc, APIStatusError):
+            return cls._classify_http_failure(exc, cls._status_code(exc))
         return _Failure(exc, health_kind="error", retryable=False)
 
     @staticmethod
@@ -174,7 +175,7 @@ class LLMGateway:
             return _Failure(exc, health_kind="conflict", retryable=True)
         if status == 429:
             return _Failure(exc, health_kind="rate_limit", retryable=True)
-        if status is not None and status >= 500:
+        if status is not None and 500 <= status < 600:
             return _Failure(
                 LLMServerError(str(exc) or f"provider returned HTTP {status}"),
                 health_kind="5xx",
