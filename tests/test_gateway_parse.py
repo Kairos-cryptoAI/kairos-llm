@@ -399,7 +399,7 @@ def test_connection_failure_exhausts_budget_as_breaker_outage(monkeypatch):
     assert len(client.chat_calls) == 3
     assert sleeps == [0.5, 1.0]
     assert len(events) == 1
-    assert events[0][2:4] == (False, "timeout")
+    assert events[0][2:4] == (False, "connection")
 
 
 def test_nonstandard_sdk_status_does_not_retry(monkeypatch):

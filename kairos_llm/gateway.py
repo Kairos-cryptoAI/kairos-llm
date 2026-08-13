@@ -141,9 +141,9 @@ class LLMGateway:
         if isinstance(exc, APIConnectionError):
             return _Failure(
                 LLMServerError(str(exc) or "provider connection failed"),
-                # The shared health contract treats network unavailability as
-                # an outage only when it is reported as timeout or 5xx.
-                health_kind="timeout",
+                # Keep provider-wide connectivity separate from a slow model.
+                # Risk aggregates this signal across Luna/Terra/Sol.
+                health_kind="connection",
                 retryable=True,
             )
         if isinstance(exc, LLMBadOutput):
