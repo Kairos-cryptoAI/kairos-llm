@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from kairos_llm.config import LLMSettings
 from kairos_llm.errors import LLMBadOutput, LLMServerError, LLMTimeout
 from kairos_llm.gateway import LLMGateway
+from kairos_llm.models import LLMWorkload
 
 
 class SentimentOutput(BaseModel):
@@ -38,7 +39,12 @@ class _FakeCompletions:
             completion_tokens=300,
             prompt_tokens_details=SimpleNamespace(cached_tokens=750),
         )
-        return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=message)],
+            usage=usage,
+            model="deepseek-v4-flash-0731",
+            system_fingerprint="fp_deepseek_0731",
+        )
 
 
 class _FakeResponses:
@@ -66,6 +72,8 @@ class _FakeResponses:
             output_text=self._content,
             status=self._status,
             usage=usage,
+            model=kwargs["model"],
+            system_fingerprint="fp_openai_test",
         )
 
 
@@ -89,9 +97,12 @@ def test_deepseek_parses_json_and_accounts_cost():
     assert result.usage.cached_input_tokens == 750
     assert result.cost_usd > 0
     assert gateway.accountant.calls == 1
+    assert result.model == "deepseek-v4-flash"
+    assert result.resolved_model == "deepseek-v4-flash-0731"
+    assert result.system_fingerprint == "fp_deepseek_0731"
 
 
-def test_openai_uses_responses_structured_outputs():
+def test_openai_workload_uses_responses_structured_outputs():
     client = _FakeClient('{"sentiment": 0.85, "impact": "bullish"}')
     gateway = LLMGateway(client=client)
 
@@ -99,17 +110,21 @@ def test_openai_uses_responses_structured_outputs():
         gateway.complete(
             system="s",
             user="u",
-            effort=ReasoningEffort.HIGH,
+            workload=LLMWorkload.AGGREGATOR_CONFLICT,
             schema=SentimentOutput,
         )
     )
 
     assert result.parsed == SentimentOutput(sentiment=0.85, impact="bullish")
     assert result.usage.cached_input_tokens == 500
-    assert client.response_calls[0]["model"] == "gpt-5.6-sol"
+    assert client.response_calls[0]["model"] == "gpt-5.6-terra"
     assert client.response_calls[0]["reasoning"] == {"effort": "high"}
     assert client.response_calls[0]["store"] is False
     assert client.chat_calls == []
+    assert result.effort == "high"
+    assert result.workload == "aggregator_conflict"
+    assert result.resolved_model == "gpt-5.6-terra"
+    assert result.system_fingerprint == "fp_openai_test"
 
 
 def test_bad_json_raises_without_recording_success():
@@ -132,12 +147,13 @@ def test_deepseek_explicitly_disables_default_thinking():
     client = _FakeClient('{"ok": true}')
     gateway = LLMGateway(client=client)
 
-    asyncio.run(gateway.complete(system="return json", user="u", effort=ReasoningEffort.LOW))
+    result = asyncio.run(gateway.complete(system="return json", user="u", workload=LLMWorkload.TEXT_SCOUTS))
 
     call = client.chat_calls[0]
     assert call["model"] == "deepseek-v4-flash"
     assert call["extra_body"] == {"thinking": {"type": "disabled"}}
     assert "reasoning_effort" not in call
+    assert result.workload == "text_scouts"
 
 
 def test_health_hook_fires_after_validated_success():
@@ -179,7 +195,7 @@ def test_health_hook_fires_on_5xx():
     with pytest.raises(LLMServerError):
         asyncio.run(gateway.complete(system="s", user="u", effort=ReasoningEffort.HIGH))
 
-    assert events[-1][:4] == ("gpt-5.6-sol", "openai", False, "5xx")
+    assert events[-1][:4] == ("gpt-5.6-terra", "openai", False, "5xx")
 
 
 def test_health_hook_fires_on_timeout():

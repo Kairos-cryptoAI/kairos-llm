@@ -1,10 +1,11 @@
 """Token pricing and running cost accounting.
 
-Prices follow the **DeepSeek-first + GPT escalation** standard list prices from
-the updated architecture document (per 1M tokens):
+Prices follow the workload-aware routing architecture (per 1M tokens):
 
   * DeepSeek-V4-Flash : $0.14 in / $0.0028 cached / $0.28 out
   * DeepSeek-V4-Pro   : $0.435 in / $0.003625 cached / $0.87 out
+  * GPT-5.6 Luna      : $0.20 in / $0.02 cached / $1.20 out
+  * GPT-5.6 Terra     : $2.00 in / $0.20 cached / $12.00 out
   * GPT-5.6 Sol       : $5.00 in / $0.50 cached / $30.00 out
 
 The monthly base budget is computed without batch/priority and assumes zero
@@ -25,17 +26,22 @@ class ModelPrice:
     output_per_m: float
 
 
-# GPT-5.6 Sol escalation tier (also the fallback price for unknown models).
-GPT56_PRICE = ModelPrice(input_per_m=5.0, cached_input_per_m=0.5, output_per_m=30.0)
-DEFAULT_PRICE = GPT56_PRICE
+GPT56_LUNA_PRICE = ModelPrice(input_per_m=0.2, cached_input_per_m=0.02, output_per_m=1.2)
+GPT56_TERRA_PRICE = ModelPrice(input_per_m=2.0, cached_input_per_m=0.2, output_per_m=12.0)
+GPT56_SOL_PRICE = ModelPrice(input_per_m=5.0, cached_input_per_m=0.5, output_per_m=30.0)
+# Preserve the public constant and conservative unknown-model fallback.
+GPT56_PRICE = GPT56_SOL_PRICE
+DEFAULT_PRICE = GPT56_SOL_PRICE
 DEEPSEEK_FLASH_PRICE = ModelPrice(input_per_m=0.14, cached_input_per_m=0.0028, output_per_m=0.28)
 DEEPSEEK_PRO_PRICE = ModelPrice(input_per_m=0.435, cached_input_per_m=0.003625, output_per_m=0.87)
 
 DEFAULT_PRICES: dict[str, ModelPrice] = {
     "deepseek-v4-flash": DEEPSEEK_FLASH_PRICE,
     "deepseek-v4-pro": DEEPSEEK_PRO_PRICE,
-    "gpt-5.6": GPT56_PRICE,
-    "gpt-5.6-sol": GPT56_PRICE,
+    "gpt-5.6-luna": GPT56_LUNA_PRICE,
+    "gpt-5.6-terra": GPT56_TERRA_PRICE,
+    "gpt-5.6": GPT56_SOL_PRICE,
+    "gpt-5.6-sol": GPT56_SOL_PRICE,
 }
 
 

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "kairos-llm"
 version = "0.1.0"
-description = "Kairos — LLM gateway with effort-based model routing, cost accounting and retries."
+description = "Kairos — LLM gateway with workload-aware model routing, cost accounting and retries."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"

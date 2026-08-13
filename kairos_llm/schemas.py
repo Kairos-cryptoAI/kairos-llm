@@ -27,3 +27,8 @@ class LLMResult:
     cost_usd: float = 0.0
     latency_s: float = 0.0
     cached: bool = False
+    workload: str | None = None
+    # The stable request alias remains in ``model``. These fields report the
+    # concrete provider backend (when returned) for operational correlation.
+    resolved_model: str | None = None
+    system_fingerprint: str | None = None

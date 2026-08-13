@@ -28,7 +28,7 @@ from pydantic import BaseModel, RootModel, ValidationError
 
 from .config import LLMSettings
 from .errors import LLMBadOutput, LLMServerError, LLMTimeout
-from .models import ModelChoice, ModelRouter, Provider
+from .models import LLMWorkload, ModelChoice, ModelRoute, ModelRouter, Provider
 from .pricing import CostAccountant
 from .schemas import LLMResult, TokenUsage
 
@@ -86,10 +86,12 @@ class LLMGateway:
         *,
         system: str,
         user: str,
-        effort: ReasoningEffort,
+        effort: ReasoningEffort | None = None,
+        workload: LLMWorkload | None = None,
         schema: type[BaseModel] | None = None,
     ) -> LLMResult:
-        choice = self.router.choose(effort)
+        route = self.router.resolve(effort, workload=workload)
+        choice = route.choice
         client = self._client_for(choice.provider)
 
         max_retries = max(0, self.settings.max_retries)
@@ -99,10 +101,10 @@ class LLMGateway:
                 async with asyncio.timeout(self.settings.request_timeout_s):
                     if choice.provider is Provider.OPENAI:
                         response = await self._complete_openai(client, choice, system, user, schema)
-                        result = self._finish_openai(response, choice, effort)
+                        result = self._finish_openai(response, route)
                     else:
                         response = await self._complete_deepseek(client, choice, system, user)
-                        result = self._finish_deepseek(response, choice, effort, schema)
+                        result = self._finish_deepseek(response, route, schema)
                 result.latency_s = time.monotonic() - started
                 await self._emit_health_safely(choice, ok=True, kind="ok", latency_s=result.latency_s)
                 return result
@@ -212,7 +214,7 @@ class LLMGateway:
             extra_body={"thinking": {"type": "disabled"}},
         )
 
-    def _finish_openai(self, response: Any, choice: ModelChoice, effort: ReasoningEffort) -> LLMResult:
+    def _finish_openai(self, response: Any, route: ModelRoute) -> LLMResult:
         status = getattr(response, "status", "completed")
         if status != "completed":
             raise LLMBadOutput(f"OpenAI response did not complete: {status}")
@@ -221,13 +223,12 @@ class LLMGateway:
             raise LLMBadOutput("OpenAI response contained no parsed output")
         parsed_value = parsed.root if isinstance(parsed, _JsonObject) else parsed
         content = getattr(response, "output_text", "") or self._content_from(parsed_value)
-        return self._result(content, parsed_value, response, choice, effort)
+        return self._result(content, parsed_value, response, route)
 
     def _finish_deepseek(
         self,
         response: Any,
-        choice: ModelChoice,
-        effort: ReasoningEffort,
+        route: ModelRoute,
         schema: type[BaseModel] | None,
     ) -> LLMResult:
         content = response.choices[0].message.content or ""
@@ -238,27 +239,47 @@ class LLMGateway:
             parsed = schema.model_validate(data) if schema else data
         except (json.JSONDecodeError, ValidationError) as exc:
             raise LLMBadOutput(str(exc)) from exc
-        return self._result(content, parsed, response, choice, effort)
+        return self._result(content, parsed, response, route)
 
     def _result(
         self,
         content: str,
         parsed: Any,
         response: Any,
-        choice: ModelChoice,
-        effort: ReasoningEffort,
+        route: ModelRoute,
     ) -> LLMResult:
+        choice = route.choice
         usage = self._usage_from(response)
         cost = self.accountant.record(choice.model, usage)
+        resolved_model = self._optional_string(getattr(response, "model", None))
+        system_fingerprint = self._optional_string(getattr(response, "system_fingerprint", None))
+        log.info(
+            "llm.response",
+            provider=choice.provider.value,
+            requested_model=choice.model,
+            resolved_model=resolved_model,
+            system_fingerprint=system_fingerprint,
+            workload=route.workload.value if route.workload else None,
+        )
         return LLMResult(
             content=content,
             parsed=parsed,
             model=choice.model,
-            effort=effort.value,
+            effort=route.effort.value,
             usage=usage,
             cost_usd=cost,
             cached=usage.cached_input_tokens > 0,
+            workload=route.workload.value if route.workload else None,
+            resolved_model=resolved_model,
+            system_fingerprint=system_fingerprint,
         )
+
+    @staticmethod
+    def _optional_string(value: Any) -> str | None:
+        if value is None:
+            return None
+        rendered = str(value).strip()
+        return rendered or None
 
     @staticmethod
     def _content_from(parsed: Any) -> str:
