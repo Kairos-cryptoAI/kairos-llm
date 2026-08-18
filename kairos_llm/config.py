@@ -19,7 +19,9 @@ class LLMSettings(CoreSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
 
     request_timeout_s: float = 20.0
-    max_retries: int = 2
+    # Paid production calls default to a single attempt. Ambiguous failures are
+    # reconciled by durable reservations instead of silently spending again.
+    max_retries: int = 0
     max_output_tokens: int = 8_192
     # Server-side prompt caching is automatic; this just flags that our system
     # prompts are stable enough to benefit (used for accounting/estimates).

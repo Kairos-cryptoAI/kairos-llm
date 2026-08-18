@@ -49,6 +49,15 @@ class ModelRoute:
     choice: ModelChoice
     effort: ReasoningEffort
     workload: LLMWorkload | None = None
+    max_output_tokens: int = 8_192
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.max_output_tokens, bool)
+            or not isinstance(self.max_output_tokens, int)
+            or self.max_output_tokens <= 0
+        ):
+            raise ValueError("max_output_tokens must be a positive integer")
 
 
 DEFAULT_WORKLOAD_ROUTES: dict[LLMWorkload, ModelRoute] = {
@@ -56,21 +65,25 @@ DEFAULT_WORKLOAD_ROUTES: dict[LLMWorkload, ModelRoute] = {
         ModelChoice("deepseek-v4-flash", Provider.DEEPSEEK),
         ReasoningEffort.LOW,
         LLMWorkload.TEXT_SCOUTS,
+        1_024,
     ),
     LLMWorkload.AGGREGATOR_NORMAL: ModelRoute(
         ModelChoice("gpt-5.6-luna", Provider.OPENAI, "medium"),
         ReasoningEffort.MEDIUM,
         LLMWorkload.AGGREGATOR_NORMAL,
+        2_048,
     ),
     LLMWorkload.AGGREGATOR_CONFLICT: ModelRoute(
         ModelChoice("gpt-5.6-terra", Provider.OPENAI, "high"),
         ReasoningEffort.HIGH,
         LLMWorkload.AGGREGATOR_CONFLICT,
+        4_096,
     ),
     LLMWorkload.MACRO_STRATEGIST: ModelRoute(
         ModelChoice("gpt-5.6-sol", Provider.OPENAI, "xhigh"),
         ReasoningEffort.XHIGH,
         LLMWorkload.MACRO_STRATEGIST,
+        8_192,
     ),
 }
 
@@ -134,10 +147,12 @@ class ModelRouter:
         provider: Provider,
         effort: ReasoningEffort,
         provider_effort: str | None = None,
+        max_output_tokens: int = 8_192,
     ) -> None:
         """Override one explicit workload without coupling it to other roles."""
         self._workload_map[workload] = ModelRoute(
             choice=ModelChoice(model, provider, provider_effort),
             effort=effort,
             workload=workload,
+            max_output_tokens=max_output_tokens,
         )

@@ -1,25 +1,50 @@
 import pytest
 from kairos_core.enums import ReasoningEffort
 
-from kairos_llm.models import LLMWorkload, ModelRouter, Provider
+from kairos_llm.models import LLMWorkload, ModelChoice, ModelRoute, ModelRouter, Provider
 
 
 @pytest.mark.parametrize(
-    ("workload", "model", "provider", "effort"),
+    ("workload", "model", "provider", "effort", "max_output_tokens"),
     [
-        (LLMWorkload.TEXT_SCOUTS, "deepseek-v4-flash", Provider.DEEPSEEK, ReasoningEffort.LOW),
-        (LLMWorkload.AGGREGATOR_NORMAL, "gpt-5.6-luna", Provider.OPENAI, ReasoningEffort.MEDIUM),
-        (LLMWorkload.AGGREGATOR_CONFLICT, "gpt-5.6-terra", Provider.OPENAI, ReasoningEffort.HIGH),
-        (LLMWorkload.MACRO_STRATEGIST, "gpt-5.6-sol", Provider.OPENAI, ReasoningEffort.XHIGH),
+        (
+            LLMWorkload.TEXT_SCOUTS,
+            "deepseek-v4-flash",
+            Provider.DEEPSEEK,
+            ReasoningEffort.LOW,
+            1_024,
+        ),
+        (
+            LLMWorkload.AGGREGATOR_NORMAL,
+            "gpt-5.6-luna",
+            Provider.OPENAI,
+            ReasoningEffort.MEDIUM,
+            2_048,
+        ),
+        (
+            LLMWorkload.AGGREGATOR_CONFLICT,
+            "gpt-5.6-terra",
+            Provider.OPENAI,
+            ReasoningEffort.HIGH,
+            4_096,
+        ),
+        (
+            LLMWorkload.MACRO_STRATEGIST,
+            "gpt-5.6-sol",
+            Provider.OPENAI,
+            ReasoningEffort.XHIGH,
+            8_192,
+        ),
     ],
 )
-def test_explicit_workload_routes(workload, model, provider, effort):
+def test_explicit_workload_routes(workload, model, provider, effort, max_output_tokens):
     route = ModelRouter().resolve(workload=workload)
 
     assert route.choice.model == model
     assert route.choice.provider is provider
     assert route.effort is effort
     assert route.workload is workload
+    assert route.max_output_tokens == max_output_tokens
 
 
 def test_provider_reasoning_modes_match_roles():
@@ -59,3 +84,9 @@ def test_workload_route_is_independent_of_legacy_effort_override():
 def test_route_requires_workload_or_effort():
     with pytest.raises(ValueError, match="workload or effort"):
         ModelRouter().resolve()
+
+
+@pytest.mark.parametrize("value", [True, 0, -1, 1.5])
+def test_route_output_limit_is_strict(value):
+    with pytest.raises(ValueError, match="positive integer"):
+        ModelRoute(ModelChoice("model", Provider.OPENAI), ReasoningEffort.HIGH, max_output_tokens=value)

@@ -100,10 +100,23 @@ class LLMGateway:
             try:
                 async with asyncio.timeout(self.settings.request_timeout_s):
                     if choice.provider is Provider.OPENAI:
-                        response = await self._complete_openai(client, choice, system, user, schema)
+                        response = await self._complete_openai(
+                            client,
+                            choice,
+                            system,
+                            user,
+                            schema,
+                            min(self.settings.max_output_tokens, route.max_output_tokens),
+                        )
                         result = self._finish_openai(response, route)
                     else:
-                        response = await self._complete_deepseek(client, choice, system, user)
+                        response = await self._complete_deepseek(
+                            client,
+                            choice,
+                            system,
+                            user,
+                            min(self.settings.max_output_tokens, route.max_output_tokens),
+                        )
                         result = self._finish_deepseek(response, route, schema)
                 result.latency_s = time.monotonic() - started
                 await self._emit_health_safely(choice, ok=True, kind="ok", latency_s=result.latency_s)
@@ -194,6 +207,7 @@ class LLMGateway:
         system: str,
         user: str,
         schema: type[BaseModel] | None,
+        max_output_tokens: int,
     ) -> Any:
         return await client.responses.parse(
             model=choice.model,
@@ -201,16 +215,23 @@ class LLMGateway:
             input=user,
             text_format=schema or _JsonObject,
             reasoning={"effort": choice.provider_effort},
-            max_output_tokens=self.settings.max_output_tokens,
+            max_output_tokens=max_output_tokens,
             store=False,
         )
 
-    async def _complete_deepseek(self, client: Any, choice: ModelChoice, system: str, user: str) -> Any:
+    async def _complete_deepseek(
+        self,
+        client: Any,
+        choice: ModelChoice,
+        system: str,
+        user: str,
+        max_output_tokens: int,
+    ) -> Any:
         return await client.chat.completions.create(
             model=choice.model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             response_format={"type": "json_object"},
-            max_tokens=self.settings.max_output_tokens,
+            max_tokens=max_output_tokens,
             extra_body={"thinking": {"type": "disabled"}},
         )
 

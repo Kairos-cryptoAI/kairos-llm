@@ -7,6 +7,10 @@ class LLMError(Exception):
     """Base class for all gateway errors."""
 
 
+class LLMBudgetError(LLMError):
+    """A paid call was denied because durable budget admission was unavailable."""
+
+
 class LLMTimeout(LLMError):
     """The model did not respond within the configured timeout."""
 

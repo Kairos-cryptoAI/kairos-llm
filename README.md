@@ -72,6 +72,18 @@ With the existing planning call/token volumes and no cache hits, the role-aware 
 an estimated $72.20/month API scenario. This is tested arithmetic, not a guaranteed budget;
 actual usage, retries, long-context multipliers and provider prices must be monitored.
 
+Production callers must wrap `LLMGateway(max_retries=0)` in `BudgetedLLMGateway` and attach a
+durable `LLMUsageBudget`. The shared monthly ceilings are `$4.50` for DeepSeek and `$45.00` for
+OpenAI, leaving the rest of the funded balances for development and recovery. Before every
+provider call the wrapper reserves a conservative prompt/schema/output allowance. Successful
+usage is committed in whole microdollars; failures and ambiguous outcomes keep the reservation
+open so a retry cannot silently spend the same capacity twice. Paid calls are denied when no
+durable backend is attached.
+
+Workload output ceilings are also fixed before the request: Text Scouts 1,024 tokens, Luna
+normal aggregation 2,048, Terra conflict handling 4,096, and Sol macro strategy 8,192. A lower
+global setting remains authoritative.
+
 ## Provider qualification
 
 Keep provider keys in local secret files and run the non-trading contract probe:

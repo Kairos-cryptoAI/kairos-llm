@@ -119,6 +119,7 @@ def test_openai_workload_uses_responses_structured_outputs():
     assert result.usage.cached_input_tokens == 500
     assert client.response_calls[0]["model"] == "gpt-5.6-terra"
     assert client.response_calls[0]["reasoning"] == {"effort": "high"}
+    assert client.response_calls[0]["max_output_tokens"] == 4_096
     assert client.response_calls[0]["store"] is False
     assert client.chat_calls == []
     assert result.effort == "high"
@@ -152,6 +153,7 @@ def test_deepseek_explicitly_disables_default_thinking():
     call = client.chat_calls[0]
     assert call["model"] == "deepseek-v4-flash"
     assert call["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert call["max_tokens"] == 1_024
     assert "reasoning_effort" not in call
     assert result.workload == "text_scouts"
 

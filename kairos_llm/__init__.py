@@ -12,8 +12,14 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
+from .budget import (
+    REGISTERED_PROVIDER_BUDGETS_MICROUSD,
+    BudgetedLLMGateway,
+    DenyLLMUsageBudget,
+    LLMUsageBudget,
+)
 from .config import LLMSettings
-from .errors import LLMBadOutput, LLMError, LLMServerError, LLMTimeout
+from .errors import LLMBadOutput, LLMBudgetError, LLMError, LLMServerError, LLMTimeout
 from .gateway import LLMGateway
 from .models import LLMWorkload, ModelChoice, ModelRoute, ModelRouter, Provider
 from .pricing import CostAccountant, PriceTable
@@ -33,7 +39,12 @@ __all__ = [
     "LLMTimeout",
     "LLMServerError",
     "LLMBadOutput",
+    "LLMBudgetError",
     "LLMGateway",
+    "BudgetedLLMGateway",
+    "DenyLLMUsageBudget",
+    "LLMUsageBudget",
+    "REGISTERED_PROVIDER_BUDGETS_MICROUSD",
     "LLMSettings",
     "__version__",
 ]
