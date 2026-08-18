@@ -104,6 +104,11 @@ class BudgetedLLMGateway:
     def accountant(self):
         return self.gateway.accountant
 
+    @property
+    def _on_health(self):
+        """Compatibility view for existing service wiring diagnostics."""
+        return self.gateway._on_health
+
     async def complete(
         self,
         *,
