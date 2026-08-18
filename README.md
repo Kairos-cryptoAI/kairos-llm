@@ -94,6 +94,19 @@ alias drift, absent usage, excessive latency/cost, or provider errors fail close
 probe validates API mechanics only—not market reasoning quality—and its report always
 contains `live_orders_allowed=false`.
 
+Paid diagnostics can select one route so an already-qualified model is not called
+again. The command also refuses to start when its conservative planned allowance
+exceeds the supplied ceiling; the default ceiling is `$0.05`:
+
+```powershell
+uv run --locked kairos-llm-qualify `
+  --deepseek-key-file D:\Kairos\secrets\deepseek_api_key `
+  --workload text_scouts `
+  --samples 1 `
+  --maximum-planned-cost-usd 0.001 `
+  --output $env:TEMP\kairos-deepseek-qualification.json
+```
+
 ## Local development
 
 ```powershell

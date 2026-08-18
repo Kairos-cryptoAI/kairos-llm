@@ -20,7 +20,8 @@ from pydantic import BaseModel
 from .config import LLMSettings
 from .gateway import LLMGateway
 from .models import DEFAULT_WORKLOAD_ROUTES, LLMWorkload, Provider
-from .schemas import LLMResult
+from .pricing import PriceTable
+from .schemas import LLMResult, TokenUsage
 
 try:
     import aiohttp
@@ -92,6 +93,8 @@ class LLMQualificationReport:
     quotas: tuple[QuotaObservation, ...]
     calls: tuple[ModelCallObservation, ...]
     workloads: tuple[WorkloadSummary, ...]
+    planned_cost_ceiling_usd: float = 0.0
+    maximum_planned_cost_usd: float = 0.0
     live_orders_allowed: bool = False
 
     @property
@@ -109,6 +112,8 @@ class LLMQualificationReport:
             "generated_at": self.generated_at,
             "samples_per_workload": self.samples_per_workload,
             "thresholds": dict(sorted(self.thresholds.items())),
+            "planned_cost_ceiling_usd": self.planned_cost_ceiling_usd,
+            "maximum_planned_cost_usd": self.maximum_planned_cost_usd,
             "status": self.status.value,
             "live_orders_allowed": False,
             "quotas": [asdict(item) for item in self.quotas],
@@ -126,6 +131,51 @@ DEFAULT_THRESHOLDS = {
     "maximum_p95_latency_s": 30.0,
     "maximum_total_estimated_cost_usd": 0.25,
 }
+QUALIFICATION_MAX_INPUT_TOKENS = 2_048
+QUALIFICATION_MAX_OUTPUT_TOKENS = 128
+DEFAULT_MAXIMUM_PLANNED_COST_USD = 0.05
+QUALIFICATION_SYSTEM_PROMPT = (
+    "You are a deterministic API qualification probe. Return the requested JSON object exactly. "
+    "Do not use tools and do not add fields."
+)
+QUALIFICATION_USER_PROMPT = (
+    'Return JSON {"protocol":"KAIROS_LLM_PROBE_V1","arithmetic":42,"decision":"NO_TRADE"}.'
+)
+
+
+def _selected_workloads(workloads: Sequence[LLMWorkload] | None) -> tuple[LLMWorkload, ...]:
+    selected = tuple(DEFAULT_WORKLOAD_ROUTES) if workloads is None else tuple(workloads)
+    if not selected:
+        raise ValueError("at least one workload must be selected")
+    if any(not isinstance(workload, LLMWorkload) for workload in selected):
+        raise ValueError("workloads must contain only LLMWorkload values")
+    if len(set(selected)) != len(selected):
+        raise ValueError("workloads must not contain duplicates")
+    return selected
+
+
+def planned_cost_ceiling_usd(
+    *,
+    workloads: Sequence[LLMWorkload] | None,
+    samples_per_workload: int,
+) -> float:
+    """Return a conservative qualification allowance before any provider call.
+
+    Output tokens are hard-capped by the provider request. The input allowance is
+    deliberately much larger than the fixed qualification prompt and schema.
+    """
+    if samples_per_workload <= 0:
+        raise ValueError("samples_per_workload must be positive")
+    usage = TokenUsage(
+        input_tokens=QUALIFICATION_MAX_INPUT_TOKENS,
+        output_tokens=QUALIFICATION_MAX_OUTPUT_TOKENS,
+    )
+    prices = PriceTable()
+    per_sample = math.fsum(
+        prices.cost(DEFAULT_WORKLOAD_ROUTES[workload].choice.model, usage)
+        for workload in _selected_workloads(workloads)
+    )
+    return per_sample * samples_per_workload
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -180,16 +230,21 @@ async def qualify_llms(
     available_keys: Mapping[Provider, str | None],
     runner: Runner,
     quota_probe: QuotaProbe,
+    workloads: Sequence[LLMWorkload] | None = None,
     thresholds: dict[str, float] | None = None,
     now: datetime | None = None,
+    planned_cost_ceiling: float = 0.0,
+    maximum_planned_cost: float = 0.0,
 ) -> LLMQualificationReport:
     if samples_per_workload <= 0:
         raise ValueError("samples_per_workload must be positive")
     policy = dict(DEFAULT_THRESHOLDS if thresholds is None else thresholds)
     if policy.keys() != DEFAULT_THRESHOLDS.keys():
         raise ValueError("thresholds must contain the exact qualification policy")
+    selected = _selected_workloads(workloads)
+    providers = tuple(dict.fromkeys(DEFAULT_WORKLOAD_ROUTES[item].choice.provider for item in selected))
     quotas: list[QuotaObservation] = []
-    for provider in Provider:
+    for provider in providers:
         key = available_keys.get(provider)
         if not key:
             quotas.append(
@@ -218,7 +273,8 @@ async def qualify_llms(
                 )
 
     calls: list[ModelCallObservation] = []
-    for workload, route in DEFAULT_WORKLOAD_ROUTES.items():
+    for workload in selected:
+        route = DEFAULT_WORKLOAD_ROUTES[workload]
         key = available_keys.get(route.choice.provider)
         for sample in range(1, samples_per_workload + 1):
             if not key:
@@ -283,7 +339,8 @@ async def qualify_llms(
                 )
 
     summaries: list[WorkloadSummary] = []
-    for workload, route in DEFAULT_WORKLOAD_ROUTES.items():
+    for workload in selected:
+        route = DEFAULT_WORKLOAD_ROUTES[workload]
         observations = [item for item in calls if item.workload == workload.value]
         successful = [item for item in observations if item.status is ProbeStatus.PASS]
         availability = len(successful) / samples_per_workload
@@ -340,13 +397,15 @@ async def qualify_llms(
             for item in summaries
         ]
     return LLMQualificationReport(
-        schema_version=1,
+        schema_version=2,
         generated_at=(now or datetime.now(UTC)).astimezone(UTC).isoformat(),
         samples_per_workload=samples_per_workload,
         thresholds=policy,
         quotas=tuple(quotas),
         calls=tuple(calls),
         workloads=tuple(summaries),
+        planned_cost_ceiling_usd=planned_cost_ceiling,
+        maximum_planned_cost_usd=maximum_planned_cost,
     )
 
 
@@ -355,23 +414,34 @@ async def qualify_live_llms(
     openai_api_key: str | None,
     deepseek_api_key: str | None,
     samples_per_workload: int,
+    workloads: Sequence[LLMWorkload] | None = None,
+    maximum_planned_cost_usd: float = DEFAULT_MAXIMUM_PLANNED_COST_USD,
 ) -> LLMQualificationReport:
+    if not math.isfinite(maximum_planned_cost_usd) or maximum_planned_cost_usd <= 0:
+        raise ValueError("maximum_planned_cost_usd must be finite and positive")
+    selected = _selected_workloads(workloads)
+    planned_cost = planned_cost_ceiling_usd(
+        workloads=selected,
+        samples_per_workload=samples_per_workload,
+    )
+    if planned_cost > maximum_planned_cost_usd:
+        raise ValueError(
+            f"planned qualification cost ceiling ${planned_cost:.8f} exceeds "
+            f"the configured ${maximum_planned_cost_usd:.8f} limit"
+        )
     settings = LLMSettings(
         openai_api_key=openai_api_key,
         deepseek_api_key=deepseek_api_key,
         max_retries=0,
-        max_output_tokens=128,
+        max_output_tokens=QUALIFICATION_MAX_OUTPUT_TOKENS,
         request_timeout_s=30,
     )
     gateway = LLMGateway(settings)
 
     async def runner(workload: LLMWorkload) -> LLMResult:
         return await gateway.complete(
-            system=(
-                "You are a deterministic API qualification probe. Return the requested object exactly. "
-                "Do not use tools and do not add fields."
-            ),
-            user=('Return {"protocol":"KAIROS_LLM_PROBE_V1","arithmetic":42,"decision":"NO_TRADE"}.'),
+            system=QUALIFICATION_SYSTEM_PROMPT,
+            user=QUALIFICATION_USER_PROMPT,
             workload=workload,
             schema=ProbePayload,
         )
@@ -427,6 +497,9 @@ async def qualify_live_llms(
             },
             runner=runner,
             quota_probe=quota_probe,
+            workloads=selected,
+            planned_cost_ceiling=planned_cost,
+            maximum_planned_cost=maximum_planned_cost_usd,
         )
     finally:
         await gateway.close()
@@ -467,6 +540,17 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--openai-key-file", type=Path)
     parser.add_argument("--deepseek-key-file", type=Path)
     parser.add_argument("--samples", type=int, default=2)
+    parser.add_argument(
+        "--workload",
+        action="append",
+        choices=[item.value for item in LLMWorkload],
+        help="qualify only this workload; repeat to select more than one",
+    )
+    parser.add_argument(
+        "--maximum-planned-cost-usd",
+        type=float,
+        default=DEFAULT_MAXIMUM_PLANNED_COST_USD,
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -479,6 +563,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             openai_api_key=_read_secret(args.openai_key_file, "OpenAI"),
             deepseek_api_key=_read_secret(args.deepseek_key_file, "DeepSeek"),
             samples_per_workload=args.samples,
+            workloads=(tuple(LLMWorkload(item) for item in args.workload) if args.workload else None),
+            maximum_planned_cost_usd=args.maximum_planned_cost_usd,
         )
     )
     _write_report(args.output, report, overwrite=args.overwrite)

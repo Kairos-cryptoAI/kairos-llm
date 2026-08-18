@@ -5,13 +5,18 @@ import pytest
 
 from kairos_llm.models import DEFAULT_WORKLOAD_ROUTES, LLMWorkload, Provider
 from kairos_llm.qualification import (
+    QUALIFICATION_SYSTEM_PROMPT,
+    QUALIFICATION_USER_PROMPT,
     LLMQualificationReport,
     ProbePayload,
     ProbeStatus,
     QuotaObservation,
     _quota_headers,
     _read_secret,
+    _selected_workloads,
     _write_report,
+    planned_cost_ceiling_usd,
+    qualify_live_llms,
     qualify_llms,
 )
 from kairos_llm.schemas import LLMResult, TokenUsage
@@ -68,6 +73,67 @@ async def test_all_workloads_pass_exact_contract_latency_usage_and_cost():
     assert len(report.calls) == 8
     assert all(item.availability == 1 and item.quality_rate == 1 for item in report.workloads)
     assert sum(item.estimated_cost_usd for item in report.workloads) == pytest.approx(0.008)
+
+
+@pytest.mark.asyncio
+async def test_targeted_workload_calls_only_its_provider_and_route():
+    called_workloads = []
+    probed_providers = []
+
+    async def runner(workload):
+        called_workloads.append(workload)
+        return _result(workload)
+
+    async def quota(provider, key):
+        probed_providers.append(provider)
+        return await _quota(provider, key)
+
+    report = await qualify_llms(
+        samples_per_workload=1,
+        available_keys={Provider.OPENAI: "openai", Provider.DEEPSEEK: "deepseek"},
+        runner=runner,
+        quota_probe=quota,
+        workloads=(LLMWorkload.TEXT_SCOUTS,),
+        now=NOW,
+    )
+
+    assert called_workloads == [LLMWorkload.TEXT_SCOUTS]
+    assert probed_providers == [Provider.DEEPSEEK]
+    assert [item.workload for item in report.calls] == [LLMWorkload.TEXT_SCOUTS.value]
+    assert [item.workload for item in report.workloads] == [LLMWorkload.TEXT_SCOUTS.value]
+
+
+def test_planned_cost_ceiling_is_route_specific_and_rejects_bad_selection():
+    deepseek_only = planned_cost_ceiling_usd(
+        workloads=(LLMWorkload.TEXT_SCOUTS,),
+        samples_per_workload=1,
+    )
+    all_routes = planned_cost_ceiling_usd(workloads=None, samples_per_workload=1)
+
+    assert deepseek_only == pytest.approx(0.00032256)
+    assert all_routes == pytest.approx(0.02059776)
+    assert deepseek_only < all_routes
+    with pytest.raises(ValueError, match="duplicates"):
+        _selected_workloads((LLMWorkload.TEXT_SCOUTS, LLMWorkload.TEXT_SCOUTS))
+    with pytest.raises(ValueError, match="at least one"):
+        _selected_workloads(())
+
+
+def test_deepseek_qualification_prompts_explicitly_request_json():
+    assert "json" in QUALIFICATION_SYSTEM_PROMPT.casefold()
+    assert "json" in QUALIFICATION_USER_PROMPT.casefold()
+
+
+@pytest.mark.asyncio
+async def test_live_qualification_refuses_over_budget_before_network():
+    with pytest.raises(ValueError, match="exceeds"):
+        await qualify_live_llms(
+            openai_api_key="not-used",
+            deepseek_api_key=None,
+            samples_per_workload=1,
+            workloads=(LLMWorkload.MACRO_STRATEGIST,),
+            maximum_planned_cost_usd=0.001,
+        )
 
 
 @pytest.mark.asyncio
