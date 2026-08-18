@@ -72,6 +72,28 @@ With the existing planning call/token volumes and no cache hits, the role-aware 
 an estimated $72.20/month API scenario. This is tested arithmetic, not a guaranteed budget;
 actual usage, retries, long-context multipliers and provider prices must be monitored.
 
+## Provider qualification
+
+Keep provider keys in local secret files and run the non-trading contract probe:
+
+```powershell
+uv run --locked kairos-llm-qualify `
+  --openai-key-file D:\Kairos\secrets\openai_api_key `
+  --deepseek-key-file D:\Kairos\secrets\deepseek_api_key `
+  --samples 2 `
+  --output $env:TEMP\kairos-llm-qualification.json `
+  --overwrite
+```
+
+The tool checks every workload route with an exact structured `NO_TRADE` response,
+records requested and resolved model identities, fingerprint, token usage, latency and
+estimated price-table cost, and probes each provider's authenticated model-list endpoint
+for observable quota headers. Keys are never accepted on argv or written to evidence.
+Missing keys make zero billable calls and produce `BLOCKED`; malformed output, model
+alias drift, absent usage, excessive latency/cost, or provider errors fail closed. The
+probe validates API mechanics only—not market reasoning quality—and its report always
+contains `live_orders_allowed=false`.
+
 ## Local development
 
 ```powershell

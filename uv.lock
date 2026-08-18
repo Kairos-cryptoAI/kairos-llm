@@ -571,6 +571,7 @@ name = "kairos-llm"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "kairos-core" },
     { name = "openai" },
     { name = "pydantic" },
@@ -589,6 +590,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10,<4" },
     { name = "kairos-core", git = "https://github.com/Kairos-cryptoAI/kairos-core.git?rev=c2b9ba192521f9843b245e1eae8a501d408a6bfa" },
     { name = "openai", specifier = ">=2.45,<3" },
     { name = "pydantic", specifier = ">=2.6,<3" },

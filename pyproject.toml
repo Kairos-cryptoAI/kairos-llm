@@ -11,11 +11,15 @@ license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [{ name = "TheLitis" }]
 dependencies = [
+    "aiohttp>=3.10,<4",
     "kairos-core>=0.2,<0.3",
     "openai>=2.45,<3",
     "pydantic>=2.6,<3",
     "pydantic-settings>=2.2,<3",
 ]
+
+[project.scripts]
+kairos-llm-qualify = "kairos_llm.qualification:main"
 
 [dependency-groups]
 dev = [
