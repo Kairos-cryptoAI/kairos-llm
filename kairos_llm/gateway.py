@@ -273,6 +273,7 @@ class LLMGateway:
         usage = self._usage_from(response)
         cost = self.accountant.record(choice.model, usage)
         resolved_model = self._optional_string(getattr(response, "model", None))
+        request_id = self._optional_string(getattr(response, "id", None))
         system_fingerprint = self._optional_string(getattr(response, "system_fingerprint", None))
         log.info(
             "llm.response",
@@ -291,6 +292,8 @@ class LLMGateway:
             cost_usd=cost,
             cached=usage.cached_input_tokens > 0,
             workload=route.workload.value if route.workload else None,
+            provider=choice.provider.value,
+            request_id=request_id,
             resolved_model=resolved_model,
             system_fingerprint=system_fingerprint,
         )

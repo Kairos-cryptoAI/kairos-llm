@@ -28,6 +28,9 @@ class LLMResult:
     latency_s: float = 0.0
     cached: bool = False
     workload: str | None = None
+    provider: str | None = None
+    request_id: str | None = None
+    budget_reservation_id: str | None = None
     # The stable request alias remains in ``model``. These fields report the
     # concrete provider backend (when returned) for operational correlation.
     resolved_model: str | None = None

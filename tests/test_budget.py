@@ -54,6 +54,8 @@ class _Gateway:
             cost_usd=PriceTable().cost(route.choice.model, usage),
             latency_s=0.5,
             workload=workload.value,
+            provider=route.choice.provider.value,
+            request_id="provider-request-123",
             resolved_model=route.choice.model,
         )
 
@@ -74,12 +76,15 @@ async def test_reserves_before_call_and_commits_rounded_actual_cost():
     )
 
     assert result.workload == LLMWorkload.TEXT_SCOUTS.value
+    assert result.provider == Provider.DEEPSEEK.value
+    assert result.request_id == "provider-request-123"
     assert len(underlying.calls) == 1
     reservation = budget.reservations[0]
     assert reservation["provider"] == Provider.DEEPSEEK.value
     assert reservation["monthly_budget_microusd"] == 4_500_000
     assert reservation["reserved_microusd"] == 861
     assert reservation["reservation_id"].startswith("kairos-llm-v1:deepseek:")
+    assert result.budget_reservation_id == reservation["reservation_id"]
     assert budget.commits == [
         {
             "provider": Provider.DEEPSEEK.value,

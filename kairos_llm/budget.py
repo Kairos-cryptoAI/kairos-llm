@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -153,7 +154,7 @@ class BudgetedLLMGateway:
             reservation_id=reservation_id,
             actual_microusd=actual_microusd,
         )
-        return result
+        return replace(result, budget_reservation_id=reservation_id)
 
     async def close(self) -> None:
         await self.gateway.close()

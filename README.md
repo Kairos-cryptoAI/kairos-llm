@@ -53,11 +53,14 @@ result = await gateway.complete(
 
 ## Provider resolution telemetry
 
-`LLMResult.model` is the stable model ID sent in the request. `resolved_model` and
-`system_fingerprint` preserve the values returned by the provider. This distinction matters for
+`LLMResult.model` is the stable model ID sent in the request. `provider`, `request_id`,
+`resolved_model` and `system_fingerprint` preserve the values returned by the provider. A
+`BudgetedLLMGateway` also attaches the exact durable `budget_reservation_id` after the
+reservation is committed. This distinction matters for
 aliases: Text Scouts continues to send `deepseek-v4-flash`, while telemetry can identify a
 resolved backend such as the 0731 snapshot without hard-coding that snapshot as an API model ID.
-The same fields are included in the `llm.response` structured log event.
+The provider/model fields are included in the `llm.response` structured log event; callers use
+the complete result to persist paid-review provenance without copying secrets or prompts.
 
 ## Failure semantics
 

@@ -40,6 +40,7 @@ class _FakeCompletions:
             prompt_tokens_details=SimpleNamespace(cached_tokens=750),
         )
         return SimpleNamespace(
+            id="deepseek-request-123",
             choices=[SimpleNamespace(message=message)],
             usage=usage,
             model="deepseek-v4-flash-0731",
@@ -68,6 +69,7 @@ class _FakeResponses:
             input_tokens_details=SimpleNamespace(cached_tokens=500),
         )
         return SimpleNamespace(
+            id="openai-request-456",
             output_parsed=parsed,
             output_text=self._content,
             status=self._status,
@@ -98,6 +100,8 @@ def test_deepseek_parses_json_and_accounts_cost():
     assert result.cost_usd > 0
     assert gateway.accountant.calls == 1
     assert result.model == "deepseek-v4-flash"
+    assert result.provider == "deepseek"
+    assert result.request_id == "deepseek-request-123"
     assert result.resolved_model == "deepseek-v4-flash-0731"
     assert result.system_fingerprint == "fp_deepseek_0731"
 
@@ -124,6 +128,8 @@ def test_openai_workload_uses_responses_structured_outputs():
     assert client.chat_calls == []
     assert result.effort == "high"
     assert result.workload == "aggregator_conflict"
+    assert result.provider == "openai"
+    assert result.request_id == "openai-request-456"
     assert result.resolved_model == "gpt-5.6-terra"
     assert result.system_fingerprint == "fp_openai_test"
 
