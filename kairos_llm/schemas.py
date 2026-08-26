@@ -35,3 +35,6 @@ class LLMResult:
     # concrete provider backend (when returned) for operational correlation.
     resolved_model: str | None = None
     system_fingerprint: str | None = None
+    # Only quota/rate-limit headers are retained. Authorization, cookies and
+    # arbitrary provider metadata must never cross the gateway boundary.
+    rate_limit_headers: dict[str, str] = field(default_factory=dict)

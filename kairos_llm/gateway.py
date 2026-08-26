@@ -11,7 +11,7 @@ import asyncio
 import inspect
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +44,12 @@ class _Failure:
     error: Exception
     health_kind: str
     retryable: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ProviderReply:
+    payload: Any
+    rate_limit_headers: dict[str, str]
 
 
 class LLMGateway:
@@ -100,7 +106,7 @@ class LLMGateway:
             try:
                 async with asyncio.timeout(self.settings.request_timeout_s):
                     if choice.provider is Provider.OPENAI:
-                        response = await self._complete_openai(
+                        reply = await self._complete_openai(
                             client,
                             choice,
                             system,
@@ -108,16 +114,17 @@ class LLMGateway:
                             schema,
                             min(self.settings.max_output_tokens, route.max_output_tokens),
                         )
-                        result = self._finish_openai(response, route)
+                        result = self._finish_openai(reply.payload, route)
                     else:
-                        response = await self._complete_deepseek(
+                        reply = await self._complete_deepseek(
                             client,
                             choice,
                             system,
                             user,
                             min(self.settings.max_output_tokens, route.max_output_tokens),
                         )
-                        result = self._finish_deepseek(response, route, schema)
+                        result = self._finish_deepseek(reply.payload, route, schema)
+                    result.rate_limit_headers = dict(reply.rate_limit_headers)
                 result.latency_s = time.monotonic() - started
                 await self._emit_health_safely(choice, ok=True, kind="ok", latency_s=result.latency_s)
                 return result
@@ -208,8 +215,8 @@ class LLMGateway:
         user: str,
         schema: type[BaseModel] | None,
         max_output_tokens: int,
-    ) -> Any:
-        return await client.responses.parse(
+    ) -> _ProviderReply:
+        request = dict(
             model=choice.model,
             instructions=system,
             input=user,
@@ -217,6 +224,13 @@ class LLMGateway:
             reasoning={"effort": choice.provider_effort},
             max_output_tokens=max_output_tokens,
             store=False,
+        )
+        if self._injected_client is not None:
+            return _ProviderReply(await client.responses.parse(**request), {})
+        raw = await client.responses.with_raw_response.parse(**request)
+        return _ProviderReply(
+            await self._parse_raw_response(raw),
+            self._rate_limit_headers(raw.headers),
         )
 
     async def _complete_deepseek(
@@ -226,14 +240,35 @@ class LLMGateway:
         system: str,
         user: str,
         max_output_tokens: int,
-    ) -> Any:
-        return await client.chat.completions.create(
+    ) -> _ProviderReply:
+        request = dict(
             model=choice.model,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
             response_format={"type": "json_object"},
             max_tokens=max_output_tokens,
             extra_body={"thinking": {"type": "disabled"}},
         )
+        if self._injected_client is not None:
+            return _ProviderReply(await client.chat.completions.create(**request), {})
+        raw = await client.chat.completions.with_raw_response.create(**request)
+        return _ProviderReply(
+            await self._parse_raw_response(raw),
+            self._rate_limit_headers(raw.headers),
+        )
+
+    @staticmethod
+    async def _parse_raw_response(raw: Any) -> Any:
+        parsed = raw.parse()
+        return await parsed if inspect.isawaitable(parsed) else parsed
+
+    @staticmethod
+    def _rate_limit_headers(headers: Mapping[str, str]) -> dict[str, str]:
+        prefixes = ("ratelimit", "x-ratelimit", "retry-after")
+        return {
+            str(key).lower(): str(value)
+            for key, value in headers.items()
+            if str(key).lower().startswith(prefixes)
+        }
 
     def _finish_openai(self, response: Any, route: ModelRoute) -> LLMResult:
         status = getattr(response, "status", "completed")

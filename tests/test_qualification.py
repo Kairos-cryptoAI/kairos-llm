@@ -24,7 +24,12 @@ from kairos_llm.schemas import LLMResult, TokenUsage
 NOW = datetime(2026, 8, 18, tzinfo=UTC)
 
 
-def _result(workload: LLMWorkload, *, cost: float = 0.001) -> LLMResult:
+def _result(
+    workload: LLMWorkload,
+    *,
+    cost: float = 0.001,
+    rate_limit_headers: dict[str, str] | None = None,
+) -> LLMResult:
     route = DEFAULT_WORKLOAD_ROUTES[workload]
     return LLMResult(
         content='{"protocol":"KAIROS_LLM_PROBE_V1","arithmetic":42,"decision":"NO_TRADE"}',
@@ -41,6 +46,7 @@ def _result(workload: LLMWorkload, *, cost: float = 0.001) -> LLMResult:
         workload=workload.value,
         resolved_model=f"{route.choice.model}-resolved",
         system_fingerprint="fingerprint",
+        rate_limit_headers=rate_limit_headers or {},
     )
 
 
@@ -101,6 +107,37 @@ async def test_targeted_workload_calls_only_its_provider_and_route():
     assert probed_providers == [Provider.DEEPSEEK]
     assert [item.workload for item in report.calls] == [LLMWorkload.TEXT_SCOUTS.value]
     assert [item.workload for item in report.workloads] == [LLMWorkload.TEXT_SCOUTS.value]
+
+
+@pytest.mark.asyncio
+async def test_inference_headers_override_unusable_model_list_quota_probe():
+    async def runner(workload):
+        return _result(
+            workload,
+            rate_limit_headers={"x-ratelimit-remaining-requests": "499"},
+        )
+
+    async def forbidden_model_list(provider, _key):
+        return QuotaObservation(
+            provider=provider.value,
+            status=ProbeStatus.FAIL,
+            http_status=403,
+            latency_ms=1,
+            headers={},
+            detail="model-list unavailable",
+        )
+
+    report = await qualify_llms(
+        samples_per_workload=1,
+        available_keys={Provider.OPENAI: "openai", Provider.DEEPSEEK: None},
+        runner=runner,
+        quota_probe=forbidden_model_list,
+        workloads=(LLMWorkload.AGGREGATOR_NORMAL,),
+        now=NOW,
+    )
+
+    assert report.quotas[0].status is ProbeStatus.PASS
+    assert report.quotas[0].headers == {"x-ratelimit-remaining-requests": "499"}
 
 
 def test_planned_cost_ceiling_is_route_specific_and_rejects_bad_selection():

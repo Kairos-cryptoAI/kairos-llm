@@ -9,7 +9,7 @@ import math
 import os
 import tempfile
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -273,6 +273,7 @@ async def qualify_llms(
                 )
 
     calls: list[ModelCallObservation] = []
+    inference_quota_headers: dict[Provider, dict[str, str]] = {}
     for workload in selected:
         route = DEFAULT_WORKLOAD_ROUTES[workload]
         key = available_keys.get(route.choice.provider)
@@ -300,6 +301,9 @@ async def qualify_llms(
             try:
                 result = await runner(workload)
                 _validate_result(result, workload)
+                inference_quota_headers.setdefault(route.choice.provider, {}).update(
+                    result.rate_limit_headers
+                )
                 calls.append(
                     ModelCallObservation(
                         workload=workload.value,
@@ -318,6 +322,7 @@ async def qualify_llms(
                         detail="exact structured contract validated",
                     )
                 )
+
             except Exception as exc:
                 calls.append(
                     ModelCallObservation(
@@ -337,6 +342,34 @@ async def qualify_llms(
                         detail=_safe_error(exc, [key]),
                     )
                 )
+
+    successful_providers = {Provider(item.provider) for item in calls if item.status is ProbeStatus.PASS}
+    reconciled_quotas: list[QuotaObservation] = []
+    for observation in quotas:
+        provider = Provider(observation.provider)
+        inference_headers = inference_quota_headers.get(provider, {})
+        if inference_headers:
+            reconciled_quotas.append(
+                replace(
+                    observation,
+                    status=ProbeStatus.PASS,
+                    headers=dict(sorted(inference_headers.items())),
+                    detail=f"observed inference quota headers: {sorted(inference_headers)}",
+                )
+            )
+        elif observation.status is ProbeStatus.FAIL and provider in successful_providers:
+            reconciled_quotas.append(
+                replace(
+                    observation,
+                    status=ProbeStatus.BLOCKED,
+                    detail=(
+                        "inference authentication succeeded but effective quota headers remain unverified"
+                    ),
+                )
+            )
+        else:
+            reconciled_quotas.append(observation)
+    quotas = reconciled_quotas
 
     summaries: list[WorkloadSummary] = []
     for workload in selected:

@@ -132,6 +132,23 @@ def test_openai_workload_uses_responses_structured_outputs():
     assert result.request_id == "openai-request-456"
     assert result.resolved_model == "gpt-5.6-terra"
     assert result.system_fingerprint == "fp_openai_test"
+    assert result.rate_limit_headers == {}
+
+
+def test_gateway_retains_only_rate_limit_headers():
+    selected = LLMGateway._rate_limit_headers(
+        {
+            "Authorization": "secret",
+            "X-RateLimit-Remaining-Requests": "499",
+            "retry-after": "2",
+            "set-cookie": "private",
+        }
+    )
+
+    assert selected == {
+        "x-ratelimit-remaining-requests": "499",
+        "retry-after": "2",
+    }
 
 
 def test_bad_json_raises_without_recording_success():
