@@ -11,10 +11,10 @@ the same logical reasoning effort.
 
 | workload | model | provider mode | price / 1M input · cached · output |
 | --- | --- | --- | --- |
-| `TEXT_SCOUTS` | `deepseek-v4-flash` | non-thinking | $0.14 · $0.0028 · $0.28 |
+| `TEXT_SCOUTS` | `deepseek-v4-flash` | non-thinking | $0.44 · $0.014 · $1.32 peak |
 | `AGGREGATOR_NORMAL` | `gpt-5.6-luna` | `medium` | $0.20 · $0.02 · $1.20 |
 | `AGGREGATOR_CONFLICT` | `gpt-5.6-terra` | `high` | $2.00 · $0.20 · $12.00 |
-| `MACRO_STRATEGIST` | `gpt-5.6-sol` | `xhigh` | $5.00 · $0.50 · $30.00 |
+| `MACRO_STRATEGIST` | `gpt-5.6-sol` | `xhigh` | $4.00 · $0.40 · $20.00 |
 
 The original effort-only API remains supported and maps `low`, `medium`, `high`, and `xhigh` to
 the same four routes. New callers should provide `LLMWorkload`; workload overrides and legacy
@@ -71,13 +71,16 @@ otherwise successful, potentially billable provider call.
 
 ## Cost scenario
 
-With the existing planning call/token volumes and no cache hits, the role-aware table produces
-an estimated $72.20/month API scenario. This is tested arithmetic, not a guaranteed budget;
-actual usage, retries, long-context multipliers and provider prices must be monitored.
+With the existing planning call/token volumes, no cache hits and conservative DeepSeek peak
+pricing, the role-aware table produces an estimated $78.98/month API scenario. Off-peak
+DeepSeek requests are billed lower, but the local ledger deliberately does not depend on
+dispatch time. This is tested arithmetic, not a guaranteed budget; actual usage, retries,
+long-context multipliers and provider prices must be monitored.
 
 Production callers must wrap `LLMGateway(max_retries=0)` in `BudgetedLLMGateway` and attach a
-durable `LLMUsageBudget`. The shared monthly ceilings are `$4.50` for DeepSeek and `$45.00` for
-OpenAI, leaving the rest of the funded balances for development and recovery. Before every
+durable `LLMUsageBudget`. During shadow qualification the shared provider ceilings are exactly
+`$1.00` for DeepSeek and `$12.00` for OpenAI, leaving the rest of the funded balances outside
+this stage's authority. Before every
 provider call the wrapper reserves a conservative prompt/schema/output allowance. Successful
 usage is committed in whole microdollars; failures and ambiguous outcomes keep the reservation
 open so a retry cannot silently spend the same capacity twice. Paid calls are denied when no

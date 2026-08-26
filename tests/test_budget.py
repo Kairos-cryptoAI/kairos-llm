@@ -81,15 +81,15 @@ async def test_reserves_before_call_and_commits_rounded_actual_cost():
     assert len(underlying.calls) == 1
     reservation = budget.reservations[0]
     assert reservation["provider"] == Provider.DEEPSEEK.value
-    assert reservation["monthly_budget_microusd"] == 4_500_000
-    assert reservation["reserved_microusd"] == 861
+    assert reservation["monthly_budget_microusd"] == 1_000_000
+    assert reservation["reserved_microusd"] == 3154
     assert reservation["reservation_id"].startswith("kairos-llm-v1:deepseek:")
     assert result.budget_reservation_id == reservation["reservation_id"]
     assert budget.commits == [
         {
             "provider": Provider.DEEPSEEK.value,
             "reservation_id": reservation["reservation_id"],
-            "actual_microusd": 192,
+            "actual_microusd": 737,
         }
     ]
 
@@ -141,7 +141,7 @@ def test_registered_caps_and_single_attempt_are_not_configurable_upward():
             _Budget(),
             monthly_budgets_microusd={
                 **REGISTERED_PROVIDER_BUDGETS_MICROUSD,
-                Provider.OPENAI: 45_000_001,
+                Provider.OPENAI: 12_000_001,
             },
         )
     with pytest.raises(ValueError, match="exact provider set"):
