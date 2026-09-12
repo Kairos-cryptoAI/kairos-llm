@@ -174,6 +174,65 @@ async def test_live_qualification_refuses_over_budget_before_network():
 
 
 @pytest.mark.asyncio
+async def test_live_qualification_refuses_missing_shared_campaign_budget_before_network():
+    with pytest.raises(ValueError, match="shared durable campaign"):
+        await qualify_live_llms(
+            openai_api_key="not-used",
+            deepseek_api_key=None,
+            samples_per_workload=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_live_probe_reserves_and_accounts_through_shared_budget(monkeypatch):
+    import kairos_llm.qualification as qualification
+    from tests.test_budget import _Budget, _Gateway
+
+    underlying = _Gateway()
+    budget = _Budget()
+    monkeypatch.setattr(qualification, "LLMGateway", lambda _settings: underlying)
+
+    async def fake_qualify(**kwargs):
+        return await kwargs["runner"](LLMWorkload.TEXT_SCOUTS)
+
+    monkeypatch.setattr(qualification, "qualify_llms", fake_qualify)
+    result = await qualify_live_llms(
+        openai_api_key=None,
+        deepseek_api_key="synthetic-not-dispatched",
+        samples_per_workload=1,
+        workloads=(LLMWorkload.TEXT_SCOUTS,),
+        usage_budget=budget,
+    )
+    assert result.budget_reservation_id is not None
+    assert len(budget.reservations) == len(budget.commits) == len(underlying.calls) == 1
+    assert underlying.closed
+
+
+@pytest.mark.asyncio
+async def test_live_probe_budget_failure_cannot_dispatch_provider(monkeypatch):
+    import kairos_llm.qualification as qualification
+    from tests.test_budget import _Budget, _Gateway
+
+    underlying = _Gateway()
+    monkeypatch.setattr(qualification, "LLMGateway", lambda _settings: underlying)
+
+    async def fake_qualify(**kwargs):
+        return await kwargs["runner"](LLMWorkload.TEXT_SCOUTS)
+
+    monkeypatch.setattr(qualification, "qualify_llms", fake_qualify)
+    with pytest.raises(RuntimeError, match="campaign exhausted"):
+        await qualify_live_llms(
+            openai_api_key=None,
+            deepseek_api_key="synthetic-not-dispatched",
+            samples_per_workload=1,
+            workloads=(LLMWorkload.TEXT_SCOUTS,),
+            usage_budget=_Budget(RuntimeError("campaign exhausted")),
+        )
+    assert underlying.calls == []
+    assert underlying.closed
+
+
+@pytest.mark.asyncio
 async def test_missing_keys_make_no_billable_calls_and_block_all_workloads():
     called = False
 

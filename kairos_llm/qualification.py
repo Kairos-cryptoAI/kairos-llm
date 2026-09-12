@@ -17,6 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from .budget import BudgetedLLMGateway, LLMUsageBudget
 from .config import LLMSettings
 from .gateway import LLMGateway
 from .models import DEFAULT_WORKLOAD_ROUTES, LLMWorkload, Provider
@@ -449,6 +450,7 @@ async def qualify_live_llms(
     samples_per_workload: int,
     workloads: Sequence[LLMWorkload] | None = None,
     maximum_planned_cost_usd: float = DEFAULT_MAXIMUM_PLANNED_COST_USD,
+    usage_budget: LLMUsageBudget | None = None,
 ) -> LLMQualificationReport:
     if not math.isfinite(maximum_planned_cost_usd) or maximum_planned_cost_usd <= 0:
         raise ValueError("maximum_planned_cost_usd must be finite and positive")
@@ -462,6 +464,8 @@ async def qualify_live_llms(
             f"planned qualification cost ceiling ${planned_cost:.8f} exceeds "
             f"the configured ${maximum_planned_cost_usd:.8f} limit"
         )
+    if usage_budget is None:
+        raise ValueError("paid qualification requires the shared durable campaign usage budget")
     settings = LLMSettings(
         openai_api_key=openai_api_key,
         deepseek_api_key=deepseek_api_key,
@@ -469,7 +473,7 @@ async def qualify_live_llms(
         max_output_tokens=QUALIFICATION_MAX_OUTPUT_TOKENS,
         request_timeout_s=30,
     )
-    gateway = LLMGateway(settings)
+    gateway = BudgetedLLMGateway(LLMGateway(settings), usage_budget)
 
     async def runner(workload: LLMWorkload) -> LLMResult:
         return await gateway.complete(
@@ -591,15 +595,37 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    report = asyncio.run(
-        qualify_live_llms(
-            openai_api_key=_read_secret(args.openai_key_file, "OpenAI"),
-            deepseek_api_key=_read_secret(args.deepseek_key_file, "DeepSeek"),
-            samples_per_workload=args.samples,
-            workloads=(tuple(LLMWorkload(item) for item in args.workload) if args.workload else None),
-            maximum_planned_cost_usd=args.maximum_planned_cost_usd,
-        )
+    # Persistence is supplied by the pinned qualification/deployment environment,
+    # not pulled into the dependency-free gateway's provider interface.
+    from kairos_persistence import (
+        QUALIFICATION_CAMPAIGN_ID,
+        CampaignLLMUsageBudget,
+        Database,
+        SourceStateRepository,
     )
+
+    async def run() -> LLMQualificationReport:
+        database = Database()
+        try:
+            await database.connect()
+            repository = SourceStateRepository(database.pool, campaign_id=QUALIFICATION_CAMPAIGN_ID)
+            selected = tuple(LLMWorkload(item) for item in args.workload) if args.workload else None
+            for provider in {
+                DEFAULT_WORKLOAD_ROUTES[item].choice.provider for item in _selected_workloads(selected)
+            }:
+                await repository.campaign_usage(provider.value)
+            return await qualify_live_llms(
+                openai_api_key=_read_secret(args.openai_key_file, "OpenAI"),
+                deepseek_api_key=_read_secret(args.deepseek_key_file, "DeepSeek"),
+                samples_per_workload=args.samples,
+                workloads=selected,
+                maximum_planned_cost_usd=args.maximum_planned_cost_usd,
+                usage_budget=CampaignLLMUsageBudget(repository),
+            )
+        finally:
+            await database.close()
+
+    report = asyncio.run(run())
     _write_report(args.output, report, overwrite=args.overwrite)
     print(f"LLM qualification: {report.status.value}; live_orders_allowed=false")
     return 0 if report.status is ProbeStatus.PASS else 2

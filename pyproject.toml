@@ -18,6 +18,9 @@ dependencies = [
     "pydantic-settings>=2.2,<3",
 ]
 
+[project.optional-dependencies]
+qualification = ["kairos-persistence>=0.1,<0.2"]
+
 [project.scripts]
 kairos-llm-qualify = "kairos_llm.qualification:main"
 
@@ -36,6 +39,7 @@ required-version = "==0.12.3"
 
 [tool.uv.sources]
 kairos-core = { git = "https://github.com/Kairos-cryptoAI/kairos-core.git", rev = "91cd95c8e5bd4393ed04606df08c205583092df7" }
+kairos-persistence = { git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git", rev = "9e7213a38f9a3d42f211d75e032e85a91cc4a662" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["kairos_llm"]

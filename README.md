@@ -1,5 +1,13 @@
 # kairos-llm
 
+Paid qualification requires the pinned `qualification` extra
+(`uv sync --locked --extra qualification`) and an already reconciled
+`kairos-dev-qualification-v1` database campaign. `kairos-llm-qualify` uses the
+shared durable provider budget before every inference and never auto-registers
+an allowance or migrates a database. Programmatic `qualify_live_llms` requires
+an injected `LLMUsageBudget`; missing budget is a startup error. Existing
+per-run planned limits remain additional bounds, not fresh monthly allowances.
+
 The Kairos LLM gateway is the single provider boundary for Text Scouts, Aggregator and Macro
 Strategist. It owns role-aware routing, strict structured output, token-cost accounting,
 transient retries and health telemetry; no analytical service talks to a provider directly.
