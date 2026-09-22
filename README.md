@@ -70,6 +70,21 @@ resolved backend such as the 0731 snapshot without hard-coding that snapshot as 
 The provider/model fields are included in the `llm.response` structured log event; callers use
 the complete result to persist paid-review provenance without copying secrets or prompts.
 
+## Research-only LLM proposals
+
+`LLMProposalOutputV1` is a closed-world schema for an experimental model hypothesis. It permits only
+`LONG_BIAS`, `SHORT_BIAS`, `NO_PROPOSAL`, or `DEFER`, a bounded rationale, and IDs for evidence already
+provided by the caller. Fields that could set execution, sizing, venue, campaign scope, or provenance
+are rejected. `build_llm_trade_proposal` binds the validated output to trusted caller context and the
+completed gateway result, including provider/model resolution, request ID, response hash, and the
+durable budget reservation.
+
+The adapter returns only `LLMTradeProposalV1`, a research record—not `StrategyIntentV1`,
+`CandidateReviewV1`, `RiskTradeDecisionV1`, or an order. This package does not publish proposals,
+subscribe a runtime trading component, or promote proposals into the execution path. Any later
+research integration must keep this separation and pass through the existing deterministic router
+and risk gates; a model response alone cannot authorize a trade.
+
 ## Failure semantics
 
 The gateway retries only connection failures, timeouts and explicitly transient HTTP responses

@@ -23,6 +23,12 @@ from .errors import LLMBadOutput, LLMBudgetError, LLMError, LLMServerError, LLMT
 from .gateway import LLMGateway
 from .models import LLMWorkload, ModelChoice, ModelRoute, ModelRouter, Provider
 from .pricing import CostAccountant, PriceTable
+from .proposals import (
+    LLMProposalContext,
+    LLMProposalOutputV1,
+    build_llm_trade_proposal,
+    proposal_evidence_id,
+)
 from .schemas import LLMResult, TokenUsage
 
 __all__ = [
@@ -46,5 +52,9 @@ __all__ = [
     "LLMUsageBudget",
     "REGISTERED_PROVIDER_BUDGETS_MICROUSD",
     "LLMSettings",
+    "LLMProposalOutputV1",
+    "LLMProposalContext",
+    "build_llm_trade_proposal",
+    "proposal_evidence_id",
     "__version__",
 ]
