@@ -26,6 +26,7 @@ from .pricing import CostAccountant, PriceTable
 from .proposals import (
     LLMProposalContext,
     LLMProposalOutputV1,
+    build_and_publish_llm_trade_proposal,
     build_llm_trade_proposal,
     proposal_evidence_id,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "LLMSettings",
     "LLMProposalOutputV1",
     "LLMProposalContext",
+    "build_and_publish_llm_trade_proposal",
     "build_llm_trade_proposal",
     "proposal_evidence_id",
     "__version__",

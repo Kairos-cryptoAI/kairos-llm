@@ -13,6 +13,7 @@ from kairos_core import (
     RiskTradeDecisionV1,
     StrategyIntentV1,
 )
+from kairos_core.topics import Topics
 from pydantic import ValidationError
 
 from kairos_llm import (
@@ -21,6 +22,7 @@ from kairos_llm import (
     LLMProposalOutputV1,
     LLMResult,
     TokenUsage,
+    build_and_publish_llm_trade_proposal,
     build_llm_trade_proposal,
     proposal_evidence_id,
 )
@@ -87,6 +89,33 @@ def _result(
         resolved_model="gpt-5.6-luna-2026-08-07",
         system_fingerprint="fp-789",
     )
+
+
+class _RecordingProposalBus:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+
+    async def publish(self, topic: str, message: LLMTradeProposalV1) -> str:
+        self.calls.append((topic, message))
+        return message.message_id
+
+
+class _UnknownOutcomeProposalBus:
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def publish(self, topic: str, message: LLMTradeProposalV1) -> str:
+        self.attempts += 1
+        raise TimeoutError("publication outcome is unknown")
+
+
+class _MismatchedProposalBus:
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def publish(self, topic: str, message: LLMTradeProposalV1) -> str:
+        self.attempts += 1
+        return "different-message-id"
 
 
 def test_adapter_builds_advisory_contract_from_trusted_context_and_gateway_metadata():
@@ -178,3 +207,65 @@ def test_non_directional_defer_does_not_require_cited_evidence():
 
     assert proposal.action is LLMProposalAction.DEFER
     assert proposal.evidence == ()
+
+
+@pytest.mark.asyncio
+async def test_publish_helper_uses_only_the_research_topic_and_returns_the_proposal():
+    bus = _RecordingProposalBus()
+    result = _result()
+
+    proposal = await build_and_publish_llm_trade_proposal(
+        context=_context(),
+        result=result,
+        bus=bus,
+    )
+
+    assert type(proposal) is LLMTradeProposalV1
+    assert bus.calls == [(Topics.LLM_TRADE_PROPOSAL, proposal)]
+    assert proposal.message_id == proposal.proposal_id
+    assert (
+        proposal.model_provenance.response_sha256
+        == hashlib.sha256(result.content.encode("utf-8")).hexdigest()
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalid_provider_output_is_rejected_before_publishing():
+    bus = _RecordingProposalBus()
+
+    with pytest.raises(LLMBadOutput):
+        await build_and_publish_llm_trade_proposal(
+            context=_context(),
+            result=_result(extra={"quantity": 1}),
+            bus=bus,
+        )
+
+    assert bus.calls == []
+
+
+@pytest.mark.asyncio
+async def test_uncertain_publication_is_not_automatically_retried():
+    bus = _UnknownOutcomeProposalBus()
+
+    with pytest.raises(TimeoutError, match="outcome is unknown"):
+        await build_and_publish_llm_trade_proposal(
+            context=_context(),
+            result=_result(),
+            bus=bus,
+        )
+
+    assert bus.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_publication_requires_the_stable_proposal_message_id():
+    bus = _MismatchedProposalBus()
+
+    with pytest.raises(RuntimeError, match="reconcile before retrying"):
+        await build_and_publish_llm_trade_proposal(
+            context=_context(),
+            result=_result(),
+            bus=bus,
+        )
+
+    assert bus.attempts == 1

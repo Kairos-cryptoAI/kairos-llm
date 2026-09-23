@@ -1,9 +1,11 @@
 """Strict provider output and trusted adapter for advisory LLM proposals.
 
-This module performs no model call, bus publication, strategy conversion, or
-execution. Provider output supplies only an advisory action, short rationale,
-and references to evidence supplied by the caller. Scope and provenance come
-from trusted context and the completed budgeted gateway result.
+No function in this module makes a model call or converts a proposal into a
+strategy, risk, or execution contract. Provider output supplies only an
+advisory action, short rationale, and references to caller-supplied evidence.
+Scope and provenance come from trusted context and the completed budgeted
+gateway result. Publication is a separate, explicit opt-in to one research
+topic through an injected durable message bus.
 """
 
 from __future__ import annotations
@@ -11,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol
 
 from kairos_core import (
     EvidenceReferenceV1,
@@ -20,6 +22,7 @@ from kairos_core import (
     LLMTradeProposalV1,
     canonical_sha256,
 )
+from kairos_core.topics import Topics
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -78,6 +81,12 @@ class LLMProposalContext:
     market_snapshot_sha256: str
     prompt_sha256: str
     evidence: tuple[EvidenceReferenceV1, ...]
+
+
+class LLMProposalMessageBus(Protocol):
+    """Narrow interface for a durable, research-only proposal publisher."""
+
+    async def publish(self, topic: str, message: LLMTradeProposalV1) -> str: ...
 
 
 def proposal_evidence_id(evidence: EvidenceReferenceV1) -> str:
@@ -152,6 +161,27 @@ def build_llm_trade_proposal(
         evidence=selected_evidence,
         model_provenance=provenance,
     )
+
+
+async def build_and_publish_llm_trade_proposal(
+    *,
+    context: LLMProposalContext,
+    result: LLMResult,
+    bus: LLMProposalMessageBus,
+) -> LLMTradeProposalV1:
+    """Publish one completed proposal to the isolated research topic.
+
+    This function makes no provider call and has no strategy, risk, or execution
+    conversion. It publishes exactly once and deliberately does not retry: if
+    the outcome is uncertain, the caller must reconcile the stable proposal ID
+    before deciding whether another attempt is safe.
+    """
+
+    proposal = build_llm_trade_proposal(context=context, result=result)
+    published_message_id = await bus.publish(Topics.LLM_TRADE_PROPOSAL, proposal)
+    if published_message_id != proposal.message_id:
+        raise RuntimeError("proposal publisher returned a different message ID; reconcile before retrying")
+    return proposal
 
 
 def _validated_output(result: LLMResult) -> LLMProposalOutputV1:

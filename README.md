@@ -80,10 +80,13 @@ completed gateway result, including provider/model resolution, request ID, respo
 durable budget reservation.
 
 The adapter returns only `LLMTradeProposalV1`, a research record—not `StrategyIntentV1`,
-`CandidateReviewV1`, `RiskTradeDecisionV1`, or an order. This package does not publish proposals,
-subscribe a runtime trading component, or promote proposals into the execution path. Any later
-research integration must keep this separation and pass through the existing deterministic router
-and risk gates; a model response alone cannot authorize a trade.
+`CandidateReviewV1`, `RiskTradeDecisionV1`, or an order. The opt-in
+`build_and_publish_llm_trade_proposal` helper publishes an already completed, validated result
+only to `Topics.LLM_TRADE_PROPOSAL`; it makes no provider call and has no conversion to strategy,
+risk, or execution contracts. An uncertain publish is not retried automatically: callers must
+reconcile the stable proposal/message ID first. Risk Manager and Execution must not subscribe to
+this research topic. This is an event-transport boundary, not a strategy evaluation or trading
+authorization.
 
 ## Failure semantics
 
