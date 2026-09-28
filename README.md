@@ -17,12 +17,12 @@ transient retries and health telemetry; no analytical service talks to a provide
 Routing is explicit by workload so two components cannot become coupled merely because they use
 the same logical reasoning effort.
 
-| workload | model | provider mode | price / 1M input · cached · output |
+| workload | model | provider mode | price / 1M input · cached · cache write · output |
 | --- | --- | --- | --- |
-| `TEXT_SCOUTS` | `deepseek-v4-flash` | non-thinking | $0.44 · $0.014 · $1.32 peak |
-| `AGGREGATOR_NORMAL` | `gpt-5.6-luna` | `medium` | $0.20 · $0.02 · $1.20 |
-| `AGGREGATOR_CONFLICT` | `gpt-5.6-terra` | `high` | $2.00 · $0.20 · $12.00 |
-| `MACRO_STRATEGIST` | `gpt-5.6-sol` | `xhigh` | $4.00 · $0.40 · $20.00 |
+| `TEXT_SCOUTS` | `deepseek-flash` | non-thinking | $0.30 · $0.006 · $0.30 · $1.20 peak |
+| `AGGREGATOR_NORMAL` | `gpt-6-luna` | `medium` | $0.10 · $0.01 · $0.125 · $0.50 |
+| `AGGREGATOR_CONFLICT` | `gpt-6-sol` | `high` | $2.00 · $0.20 · $2.50 · $10.00 |
+| `MACRO_STRATEGIST` | `gpt-6-sol` | `xhigh` | $2.00 · $0.20 · $2.50 · $10.00 |
 
 The original effort-only API remains supported and maps `low`, `medium`, `high`, and `xhigh` to
 the same four routes. New callers should provide `LLMWorkload`; workload overrides and legacy
@@ -66,8 +66,8 @@ result = await gateway.complete(
 `BudgetedLLMGateway` also attaches the exact durable `budget_reservation_id` after the
 reservation is committed. It stamps the call start and observed response time around
 the provider request; direct unbudgeted results leave these fields unset. This distinction matters for
-aliases: Text Scouts continues to send `deepseek-v4-flash`, while telemetry can identify a
-resolved backend such as the 0731 snapshot without hard-coding that snapshot as an API model ID.
+aliases: Text Scouts sends `deepseek-flash`, while telemetry records the resolved backend
+returned by DeepSeek without hard-coding a provider snapshot as an API model ID.
 The provider/model fields are included in the `llm.response` structured log event; callers use
 the complete result to persist paid-review provenance without copying secrets or prompts.
 
@@ -114,10 +114,13 @@ otherwise successful, potentially billable provider call.
 ## Cost scenario
 
 With the existing planning call/token volumes, no cache hits and conservative DeepSeek peak
-pricing, the role-aware table produces an estimated $78.98/month API scenario. Off-peak
+pricing, the role-aware table produces an estimated $58.30/month API scenario at ordinary input
+rates, or $61.25 if every OpenAI input token incurs the higher cache-write rate. Off-peak
 DeepSeek requests are billed lower, but the local ledger deliberately does not depend on
-dispatch time. This is tested arithmetic, not a guaranteed budget; actual usage, retries,
-long-context multipliers and provider prices must be monitored.
+dispatch time. The budget wrapper reserves at the higher cache-write rate and, when the
+provider omits cache-write usage, accounts every noncached input token as a write. These are
+tested estimates, not a guaranteed budget; actual usage, retries, long-context multipliers
+and provider prices must be monitored.
 
 Production callers must wrap `LLMGateway(max_retries=0)` in `BudgetedLLMGateway` and attach a
 durable `LLMUsageBudget`. During shadow qualification the shared provider ceilings are exactly
@@ -129,7 +132,7 @@ open so a retry cannot silently spend the same capacity twice. Paid calls are de
 durable backend is attached.
 
 Workload output ceilings are also fixed before the request: Text Scouts 1,024 tokens, Luna
-normal aggregation 2,048, Terra conflict handling 4,096, and Sol macro strategy 8,192. A lower
+normal aggregation 2,048, Sol conflict handling 4,096, and Sol macro strategy 8,192. A lower
 global setting remains authoritative.
 
 ## Provider qualification
@@ -163,7 +166,7 @@ uv run --locked kairos-llm-qualify `
   --deepseek-key-file D:\Kairos\secrets\deepseek_api_key `
   --workload text_scouts `
   --samples 1 `
-  --maximum-planned-cost-usd 0.001 `
+  --maximum-planned-cost-usd 0.002 `
   --output $env:TEMP\kairos-deepseek-qualification.json
 ```
 

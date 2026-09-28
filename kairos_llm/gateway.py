@@ -162,7 +162,7 @@ class LLMGateway:
             return _Failure(
                 LLMServerError(str(exc) or "provider connection failed"),
                 # Keep provider-wide connectivity separate from a slow model.
-                # Risk aggregates this signal across Luna/Terra/Sol.
+                # Risk aggregates this signal across all configured model routes.
                 health_kind="connection",
                 retryable=True,
             )
@@ -367,13 +367,19 @@ class LLMGateway:
         details = getattr(usage, "input_tokens_details", None) or getattr(
             usage, "prompt_tokens_details", None
         )
-        cached = getattr(details, "cached_tokens", 0) if details else 0
+        input_tokens = int(getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", 0) or 0)
+        cached = int(getattr(details, "cached_tokens", 0) or 0) if details else 0
+        reported_writes = getattr(details, "cache_write_tokens", None) if details else None
+        # An older SDK or provider can omit the cache-write breakdown. Assume
+        # every non-cached token was written so accounting cannot understate cost.
+        cache_writes = max(0, input_tokens - cached) if reported_writes is None else int(reported_writes)
         return TokenUsage(
-            input_tokens=int(getattr(usage, "input_tokens", None) or getattr(usage, "prompt_tokens", 0) or 0),
-            cached_input_tokens=int(cached or 0),
+            input_tokens=input_tokens,
+            cached_input_tokens=cached,
             output_tokens=int(
                 getattr(usage, "output_tokens", None) or getattr(usage, "completion_tokens", 0) or 0
             ),
+            cache_write_tokens=cache_writes,
         )
 
     async def close(self) -> None:

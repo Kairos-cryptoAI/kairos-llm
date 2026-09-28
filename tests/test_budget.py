@@ -8,7 +8,7 @@ from kairos_llm.budget import (
     BudgetedLLMGateway,
     DenyLLMUsageBudget,
 )
-from kairos_llm.errors import LLMBudgetError
+from kairos_llm.errors import LLMBudgetError, LLMServerError
 from kairos_llm.models import DEFAULT_WORKLOAD_ROUTES, LLMWorkload, ModelRouter, Provider
 from kairos_llm.pricing import CostAccountant, PriceTable
 from kairos_llm.schemas import LLMResult, TokenUsage
@@ -82,7 +82,7 @@ async def test_reserves_before_call_and_commits_rounded_actual_cost():
     reservation = budget.reservations[0]
     assert reservation["provider"] == Provider.DEEPSEEK.value
     assert reservation["monthly_budget_microusd"] == 1_000_000
-    assert reservation["reserved_microusd"] == 3154
+    assert reservation["reserved_microusd"] == 2458
     assert reservation["reservation_id"].startswith("kairos-llm-v1:deepseek:")
     assert result.budget_reservation_id == reservation["reservation_id"]
     assert result.attempt_started_at_ts_ms is not None
@@ -92,7 +92,7 @@ async def test_reserves_before_call_and_commits_rounded_actual_cost():
         {
             "provider": Provider.DEEPSEEK.value,
             "reservation_id": reservation["reservation_id"],
-            "actual_microusd": 737,
+            "actual_microusd": 590,
         }
     ]
 
@@ -107,6 +107,72 @@ async def test_budget_denial_happens_before_provider_call():
         await gateway.complete(system="json", user="{}", workload=LLMWorkload.MACRO_STRATEGIST)
 
     assert underlying.calls == []
+    assert budget.commits == []
+
+
+@pytest.mark.asyncio
+async def test_unknown_model_price_is_denied_before_reserving_or_calling():
+    budget = _Budget()
+    underlying = _Gateway()
+    underlying.router.override_workload(
+        LLMWorkload.AGGREGATOR_NORMAL,
+        "unregistered-model",
+        Provider.OPENAI,
+        ReasoningEffort.MEDIUM,
+        "medium",
+    )
+    gateway = BudgetedLLMGateway(underlying, budget)
+
+    with pytest.raises(LLMBudgetError, match="registered model pricing"):
+        await gateway.complete(system="json", user="{}", workload=LLMWorkload.AGGREGATOR_NORMAL)
+
+    assert budget.reservations == []
+    assert underlying.calls == []
+
+
+@pytest.mark.asyncio
+async def test_gpt6_reserves_cache_write_worst_case():
+    budget = _Budget()
+    gateway = BudgetedLLMGateway(_Gateway(), budget)
+
+    await gateway.complete(system="json", user="{}", workload=LLMWorkload.AGGREGATOR_CONFLICT)
+
+    assert budget.reservations[0]["reserved_microusd"] == 51200
+
+
+@pytest.mark.asyncio
+async def test_underreported_gateway_cost_leaves_reservation_open():
+    class _UnderbilledGateway(_Gateway):
+        async def complete(self, **kwargs):
+            result = await super().complete(**kwargs)
+            result.cost_usd = 0.0
+            return result
+
+    budget = _Budget()
+    gateway = BudgetedLLMGateway(_UnderbilledGateway(), budget)
+
+    with pytest.raises(LLMServerError, match="disagree on model cost"):
+        await gateway.complete(system="json", user="{}", workload=LLMWorkload.TEXT_SCOUTS)
+
+    assert len(budget.reservations) == 1
+    assert budget.commits == []
+
+
+@pytest.mark.asyncio
+async def test_invalid_usage_leaves_reservation_open():
+    class _InvalidUsageGateway(_Gateway):
+        async def complete(self, **kwargs):
+            result = await super().complete(**kwargs)
+            result.usage.cached_input_tokens = 1_501
+            return result
+
+    budget = _Budget()
+    gateway = BudgetedLLMGateway(_InvalidUsageGateway(), budget)
+
+    with pytest.raises(LLMServerError, match="invalid token usage"):
+        await gateway.complete(system="json", user="{}", workload=LLMWorkload.TEXT_SCOUTS)
+
+    assert len(budget.reservations) == 1
     assert budget.commits == []
 
 

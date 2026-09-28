@@ -62,25 +62,25 @@ class ModelRoute:
 
 DEFAULT_WORKLOAD_ROUTES: dict[LLMWorkload, ModelRoute] = {
     LLMWorkload.TEXT_SCOUTS: ModelRoute(
-        ModelChoice("deepseek-v4-flash", Provider.DEEPSEEK),
+        ModelChoice("deepseek-flash", Provider.DEEPSEEK),
         ReasoningEffort.LOW,
         LLMWorkload.TEXT_SCOUTS,
         1_024,
     ),
     LLMWorkload.AGGREGATOR_NORMAL: ModelRoute(
-        ModelChoice("gpt-5.6-luna", Provider.OPENAI, "medium"),
+        ModelChoice("gpt-6-luna", Provider.OPENAI, "medium"),
         ReasoningEffort.MEDIUM,
         LLMWorkload.AGGREGATOR_NORMAL,
         2_048,
     ),
     LLMWorkload.AGGREGATOR_CONFLICT: ModelRoute(
-        ModelChoice("gpt-5.6-terra", Provider.OPENAI, "high"),
+        ModelChoice("gpt-6-sol", Provider.OPENAI, "high"),
         ReasoningEffort.HIGH,
         LLMWorkload.AGGREGATOR_CONFLICT,
         4_096,
     ),
     LLMWorkload.MACRO_STRATEGIST: ModelRoute(
-        ModelChoice("gpt-5.6-sol", Provider.OPENAI, "xhigh"),
+        ModelChoice("gpt-6-sol", Provider.OPENAI, "xhigh"),
         ReasoningEffort.XHIGH,
         LLMWorkload.MACRO_STRATEGIST,
         8_192,

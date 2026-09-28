@@ -123,10 +123,12 @@ class BudgetedLLMGateway:
         if workload is None:
             raise LLMBudgetError("budgeted production calls require an explicit workload")
         route = self.router.resolve(effort, workload=workload)
+        if not self.prices.has_model(route.choice.model):
+            raise LLMBudgetError("budgeted production calls require registered model pricing")
         input_ceiling = self._input_token_ceiling(system, user, schema)
         output_ceiling = min(self.settings.max_output_tokens, route.max_output_tokens)
         reserved_microusd = self._microusd(
-            self.prices.cost(
+            self.prices.reservation_cost(
                 route.choice.model,
                 TokenUsage(input_tokens=input_ceiling, output_tokens=output_ceiling),
             )
@@ -149,7 +151,17 @@ class BudgetedLLMGateway:
         response_observed_at_ts_ms = time.time_ns() // 1_000_000
         if result.usage.input_tokens > input_ceiling or result.usage.output_tokens > output_ceiling:
             raise LLMServerError("provider usage exceeded the durable reservation envelope")
-        actual_microusd = self._microusd(result.cost_usd)
+        try:
+            self.prices._validate_usage(result.usage)
+        except ValueError as exc:
+            raise LLMServerError("provider returned invalid token usage breakdown") from exc
+        if result.model != route.choice.model or result.provider != route.choice.provider.value:
+            raise LLMServerError("provider result does not match the reserved route")
+        if result.usage.input_tokens == 0 or result.usage.output_tokens == 0:
+            raise LLMServerError("provider returned no billable token usage")
+        actual_microusd = self._microusd(self.prices.cost(route.choice.model, result.usage))
+        if self._microusd(result.cost_usd) != actual_microusd:
+            raise LLMServerError("gateway and durable budget disagree on model cost")
         if actual_microusd > reserved_microusd:
             raise LLMServerError("accounted LLM cost exceeded the durable reservation")
         await self.budget.commit(

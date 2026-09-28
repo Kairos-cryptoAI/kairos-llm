@@ -147,8 +147,8 @@ def test_planned_cost_ceiling_is_route_specific_and_rejects_bad_selection():
     )
     all_routes = planned_cost_ceiling_usd(workloads=None, samples_per_workload=1)
 
-    assert deepseek_only == pytest.approx(0.00107008)
-    assert all_routes == pytest.approx(0.01801728)
+    assert deepseek_only == pytest.approx(0.0013824)
+    assert all_routes == pytest.approx(0.0249984)
     assert deepseek_only < all_routes
     with pytest.raises(ValueError, match="duplicates"):
         _selected_workloads((LLMWorkload.TEXT_SCOUTS, LLMWorkload.TEXT_SCOUTS))

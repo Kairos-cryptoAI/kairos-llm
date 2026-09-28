@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from .budget import BudgetedLLMGateway, LLMUsageBudget
+from .budget import MINIMUM_INPUT_TOKEN_RESERVATION, BudgetedLLMGateway, LLMUsageBudget
 from .config import LLMSettings
 from .gateway import LLMGateway
 from .models import DEFAULT_WORKLOAD_ROUTES, LLMWorkload, Provider
@@ -132,7 +132,7 @@ DEFAULT_THRESHOLDS = {
     "maximum_p95_latency_s": 30.0,
     "maximum_total_estimated_cost_usd": 0.25,
 }
-QUALIFICATION_MAX_INPUT_TOKENS = 2_048
+QUALIFICATION_MAX_INPUT_TOKENS = MINIMUM_INPUT_TOKEN_RESERVATION
 QUALIFICATION_MAX_OUTPUT_TOKENS = 128
 DEFAULT_MAXIMUM_PLANNED_COST_USD = 0.05
 QUALIFICATION_SYSTEM_PROMPT = (
@@ -173,7 +173,7 @@ def planned_cost_ceiling_usd(
     )
     prices = PriceTable()
     per_sample = math.fsum(
-        prices.cost(DEFAULT_WORKLOAD_ROUTES[workload].choice.model, usage)
+        prices.reservation_cost(DEFAULT_WORKLOAD_ROUTES[workload].choice.model, usage)
         for workload in _selected_workloads(workloads)
     )
     return per_sample * samples_per_workload

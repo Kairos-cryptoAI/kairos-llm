@@ -11,6 +11,7 @@ class TokenUsage:
     input_tokens: int = 0
     cached_input_tokens: int = 0
     output_tokens: int = 0  # includes reasoning tokens
+    cache_write_tokens: int = 0
 
     @property
     def billable_input(self) -> int:

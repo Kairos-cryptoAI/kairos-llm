@@ -9,28 +9,28 @@ from kairos_llm.models import LLMWorkload, ModelChoice, ModelRoute, ModelRouter,
     [
         (
             LLMWorkload.TEXT_SCOUTS,
-            "deepseek-v4-flash",
+            "deepseek-flash",
             Provider.DEEPSEEK,
             ReasoningEffort.LOW,
             1_024,
         ),
         (
             LLMWorkload.AGGREGATOR_NORMAL,
-            "gpt-5.6-luna",
+            "gpt-6-luna",
             Provider.OPENAI,
             ReasoningEffort.MEDIUM,
             2_048,
         ),
         (
             LLMWorkload.AGGREGATOR_CONFLICT,
-            "gpt-5.6-terra",
+            "gpt-6-sol",
             Provider.OPENAI,
             ReasoningEffort.HIGH,
             4_096,
         ),
         (
             LLMWorkload.MACRO_STRATEGIST,
-            "gpt-5.6-sol",
+            "gpt-6-sol",
             Provider.OPENAI,
             ReasoningEffort.XHIGH,
             8_192,
@@ -64,10 +64,10 @@ def test_provider_reasoning_modes_match_roles():
 def test_effort_only_routing_remains_backward_compatible():
     router = ModelRouter()
 
-    assert router.choose(ReasoningEffort.LOW).model == "deepseek-v4-flash"
-    assert router.choose(ReasoningEffort.MEDIUM).model == "gpt-5.6-luna"
-    assert router.choose(ReasoningEffort.HIGH).model == "gpt-5.6-terra"
-    assert router.choose(ReasoningEffort.XHIGH).model == "gpt-5.6-sol"
+    assert router.choose(ReasoningEffort.LOW).model == "deepseek-flash"
+    assert router.choose(ReasoningEffort.MEDIUM).model == "gpt-6-luna"
+    assert router.choose(ReasoningEffort.HIGH).model == "gpt-6-sol"
+    assert router.choose(ReasoningEffort.XHIGH).model == "gpt-6-sol"
     assert str(Provider.DEEPSEEK) == "deepseek"
 
 
@@ -76,9 +76,7 @@ def test_workload_route_is_independent_of_legacy_effort_override():
     router.override(ReasoningEffort.MEDIUM, "legacy-override", Provider.DEEPSEEK)
 
     assert router.choose(ReasoningEffort.MEDIUM).model == "legacy-override"
-    assert (
-        router.choose(ReasoningEffort.MEDIUM, workload=LLMWorkload.AGGREGATOR_NORMAL).model == "gpt-5.6-luna"
-    )
+    assert router.choose(ReasoningEffort.MEDIUM, workload=LLMWorkload.AGGREGATOR_NORMAL).model == "gpt-6-luna"
 
 
 def test_route_requires_workload_or_effort():
