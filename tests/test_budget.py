@@ -85,6 +85,9 @@ async def test_reserves_before_call_and_commits_rounded_actual_cost():
     assert reservation["reserved_microusd"] == 3154
     assert reservation["reservation_id"].startswith("kairos-llm-v1:deepseek:")
     assert result.budget_reservation_id == reservation["reservation_id"]
+    assert result.attempt_started_at_ts_ms is not None
+    assert result.response_observed_at_ts_ms is not None
+    assert result.attempt_started_at_ts_ms <= result.response_observed_at_ts_ms
     assert budget.commits == [
         {
             "provider": Provider.DEEPSEEK.value,

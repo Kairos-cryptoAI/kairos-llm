@@ -23,6 +23,7 @@ from kairos_llm import (
     LLMResult,
     TokenUsage,
     build_and_publish_llm_trade_proposal,
+    build_llm_proposal_completion_receipt,
     build_llm_trade_proposal,
     proposal_evidence_id,
 )
@@ -207,6 +208,63 @@ def test_non_directional_defer_does_not_require_cited_evidence():
 
     assert proposal.action is LLMProposalAction.DEFER
     assert proposal.evidence == ()
+
+
+def test_model_can_report_cited_move_without_claiming_a_direction():
+    proposal = build_llm_trade_proposal(
+        context=_context(), result=_result(action=LLMProposalAction.VOLATILITY_ALERT)
+    )
+
+    assert proposal.action is LLMProposalAction.VOLATILITY_ALERT
+    assert proposal.evidence == (_evidence(),)
+    assert not hasattr(proposal, "order_id")
+    for execution_type in (StrategyIntentV1, CandidateReviewV1, RiskTradeDecisionV1):
+        with pytest.raises(ValidationError):
+            execution_type.model_validate(proposal.to_payload())
+
+    with pytest.raises(LLMBadOutput):
+        build_llm_trade_proposal(
+            context=_context(evidence=()),
+            result=_result(action=LLMProposalAction.VOLATILITY_ALERT, evidence_ids=()),
+        )
+
+
+def test_completion_receipt_requires_gateway_timestamps_and_exact_response() -> None:
+    context = _context()
+    raw_result = _result()
+    proposal = build_llm_trade_proposal(context=context, result=raw_result)
+    with pytest.raises(LLMBadOutput, match="trusted budgeted-gateway timestamps"):
+        build_llm_proposal_completion_receipt(
+            context=context,
+            result=raw_result,
+            proposal=proposal,
+            sample_deadline_ts_ms=context.market_as_of_ts_ms + 10_000,
+        )
+
+    stamped = replace(
+        raw_result,
+        attempt_started_at_ts_ms=context.market_as_of_ts_ms + 100,
+        response_observed_at_ts_ms=context.market_as_of_ts_ms + 300,
+    )
+    receipt = build_llm_proposal_completion_receipt(
+        context=context,
+        result=stamped,
+        proposal=proposal,
+        sample_deadline_ts_ms=context.market_as_of_ts_ms + 10_000,
+    )
+    assert receipt.proposal_id == proposal.proposal_id
+    assert receipt.model_provenance == proposal.model_provenance
+    assert receipt.response_observed_at_ts_ms == context.market_as_of_ts_ms + 300
+    assert not hasattr(receipt, "order_id")
+
+    altered = replace(stamped, request_id="different-provider-request")
+    with pytest.raises(LLMBadOutput, match="differs"):
+        build_llm_proposal_completion_receipt(
+            context=context,
+            result=altered,
+            proposal=proposal,
+            sample_deadline_ts_ms=context.market_as_of_ts_ms + 10_000,
+        )
 
 
 @pytest.mark.asyncio

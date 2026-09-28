@@ -27,6 +27,7 @@ from .proposals import (
     LLMProposalContext,
     LLMProposalOutputV1,
     build_and_publish_llm_trade_proposal,
+    build_llm_proposal_completion_receipt,
     build_llm_trade_proposal,
     proposal_evidence_id,
 )
@@ -57,6 +58,7 @@ __all__ = [
     "LLMProposalContext",
     "build_and_publish_llm_trade_proposal",
     "build_llm_trade_proposal",
+    "build_llm_proposal_completion_receipt",
     "proposal_evidence_id",
     "__version__",
 ]

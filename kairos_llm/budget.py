@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any, Protocol
@@ -137,6 +138,7 @@ class BudgetedLLMGateway:
             reserved_microusd=reserved_microusd,
             monthly_budget_microusd=self.monthly_budgets_microusd[route.choice.provider],
         )
+        attempt_started_at_ts_ms = time.time_ns() // 1_000_000
         result = await self.gateway.complete(
             system=system,
             user=user,
@@ -144,6 +146,7 @@ class BudgetedLLMGateway:
             workload=workload,
             schema=schema,
         )
+        response_observed_at_ts_ms = time.time_ns() // 1_000_000
         if result.usage.input_tokens > input_ceiling or result.usage.output_tokens > output_ceiling:
             raise LLMServerError("provider usage exceeded the durable reservation envelope")
         actual_microusd = self._microusd(result.cost_usd)
@@ -154,7 +157,12 @@ class BudgetedLLMGateway:
             reservation_id=reservation_id,
             actual_microusd=actual_microusd,
         )
-        return replace(result, budget_reservation_id=reservation_id)
+        return replace(
+            result,
+            budget_reservation_id=reservation_id,
+            attempt_started_at_ts_ms=attempt_started_at_ts_ms,
+            response_observed_at_ts_ms=response_observed_at_ts_ms,
+        )
 
     async def close(self) -> None:
         await self.gateway.close()

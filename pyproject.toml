@@ -38,8 +38,8 @@ dev = [
 required-version = "==0.12.3"
 
 [tool.uv.sources]
-kairos-core = { git = "https://github.com/Kairos-cryptoAI/kairos-core.git", rev = "0c8717c18d535465ae89c51bcd958b0884ec02ab" }
-kairos-persistence = { git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git", rev = "ad566c2b61ceb5d90de3334d6e15511753562bd0" }
+kairos-core = { git = "https://github.com/Kairos-cryptoAI/kairos-core.git", rev = "9c8659545218147ae181cac04d22a68b5a6549ef" }
+kairos-persistence = { git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git", rev = "34b5214f366338e4b898f2d7bb46b2fcfbf4051e" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["kairos_llm"]

@@ -31,6 +31,10 @@ class LLMResult:
     provider: str | None = None
     request_id: str | None = None
     budget_reservation_id: str | None = None
+    # Wall-clock bounds are attached by BudgetedLLMGateway, never parsed from
+    # provider JSON.  Direct/unbudgeted gateway results leave them unset.
+    attempt_started_at_ts_ms: int | None = None
+    response_observed_at_ts_ms: int | None = None
     # The stable request alias remains in ``model``. These fields report the
     # concrete provider backend (when returned) for operational correlation.
     resolved_model: str | None = None

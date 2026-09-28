@@ -18,6 +18,7 @@ from typing import Annotated, Literal, Protocol
 from kairos_core import (
     EvidenceReferenceV1,
     LLMProposalAction,
+    LLMProposalCompletionReceiptV1,
     LLMProposalModelProvenanceV1,
     LLMTradeProposalV1,
     canonical_sha256,
@@ -61,9 +62,13 @@ class LLMProposalOutputV1(BaseModel):
     def validate_evidence(self) -> LLMProposalOutputV1:
         if len(self.evidence_ids) != len(set(self.evidence_ids)):
             raise ValueError("evidence_ids cannot contain duplicates")
-        directional = (LLMProposalAction.LONG_BIAS, LLMProposalAction.SHORT_BIAS)
-        if self.action in directional and not self.evidence_ids:
-            raise ValueError("directional proposals require cited evidence_ids")
+        candidate_hypotheses = (
+            LLMProposalAction.LONG_BIAS,
+            LLMProposalAction.SHORT_BIAS,
+            LLMProposalAction.VOLATILITY_ALERT,
+        )
+        if self.action in candidate_hypotheses and not self.evidence_ids:
+            raise ValueError("candidate hypotheses require cited evidence_ids")
         return self
 
 
@@ -160,6 +165,42 @@ def build_llm_trade_proposal(
         rationale=output.rationale,
         evidence=selected_evidence,
         model_provenance=provenance,
+    )
+
+
+def build_llm_proposal_completion_receipt(
+    *,
+    context: LLMProposalContext,
+    result: LLMResult,
+    proposal: LLMTradeProposalV1,
+    sample_deadline_ts_ms: int,
+) -> LLMProposalCompletionReceiptV1:
+    """Link a completed proposal to timestamps stamped by BudgetedLLMGateway.
+
+    An ordinary result or provider JSON cannot supply the observed time. This
+    receipt is research evidence only; it does not publish or authorize a trade.
+    """
+
+    if result.attempt_started_at_ts_ms is None or result.response_observed_at_ts_ms is None:
+        raise LLMBadOutput("proposal completion requires trusted budgeted-gateway timestamps")
+    expected = build_llm_trade_proposal(context=context, result=result)
+    if proposal.proposal_id != expected.proposal_id:
+        raise LLMBadOutput("proposal differs from the completed budgeted-gateway response")
+    reservation_id = _required_metadata(result.budget_reservation_id, "durable budget reservation")
+    return LLMProposalCompletionReceiptV1(
+        campaign_id=context.campaign_id,
+        arm_id=context.arm_id,
+        sample_id=context.sample_id,
+        symbol=context.symbol,
+        timeframe=context.timeframe,
+        market_as_of_ts_ms=context.market_as_of_ts_ms,
+        market_snapshot_sha256=context.market_snapshot_sha256,
+        sample_deadline_ts_ms=sample_deadline_ts_ms,
+        attempt_id=reservation_id,
+        proposal_id=proposal.proposal_id,
+        model_provenance=proposal.model_provenance,
+        attempt_started_at_ts_ms=result.attempt_started_at_ts_ms,
+        response_observed_at_ts_ms=result.response_observed_at_ts_ms,
     )
 
 

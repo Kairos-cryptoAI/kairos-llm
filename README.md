@@ -64,7 +64,8 @@ result = await gateway.complete(
 `LLMResult.model` is the stable model ID sent in the request. `provider`, `request_id`,
 `resolved_model` and `system_fingerprint` preserve the values returned by the provider. A
 `BudgetedLLMGateway` also attaches the exact durable `budget_reservation_id` after the
-reservation is committed. This distinction matters for
+reservation is committed. It stamps the call start and observed response time around
+the provider request; direct unbudgeted results leave these fields unset. This distinction matters for
 aliases: Text Scouts continues to send `deepseek-v4-flash`, while telemetry can identify a
 resolved backend such as the 0731 snapshot without hard-coding that snapshot as an API model ID.
 The provider/model fields are included in the `llm.response` structured log event; callers use
@@ -73,11 +74,17 @@ the complete result to persist paid-review provenance without copying secrets or
 ## Research-only LLM proposals
 
 `LLMProposalOutputV1` is a closed-world schema for an experimental model hypothesis. It permits only
-`LONG_BIAS`, `SHORT_BIAS`, `NO_PROPOSAL`, or `DEFER`, a bounded rationale, and IDs for evidence already
+`LONG_BIAS`, `SHORT_BIAS`, `VOLATILITY_ALERT`, `NO_PROPOSAL`, or `DEFER`, a bounded rationale,
+and IDs for evidence already
 provided by the caller. Fields that could set execution, sizing, venue, campaign scope, or provenance
-are rejected. `build_llm_trade_proposal` binds the validated output to trusted caller context and the
+are rejected. `VOLATILITY_ALERT` cites timestamped input evidence and asserts no trade direction.
+`build_llm_trade_proposal` binds the validated output to trusted caller context and the
 completed gateway result, including provider/model resolution, request ID, response hash, and the
 durable budget reservation.
+`build_llm_proposal_completion_receipt` requires those trusted timing fields and
+an exact recomputation of the proposal from the gateway result. The separate
+receipt allows a SIM research pair to reject a model answer that arrived after
+its scheduled decision time; the model cannot supply its own timing metadata.
 
 The adapter returns only `LLMTradeProposalV1`, a research record—not `StrategyIntentV1`,
 `CandidateReviewV1`, `RiskTradeDecisionV1`, or an order. The opt-in
@@ -87,6 +94,15 @@ risk, or execution contracts. An uncertain publish is not retried automatically:
 reconcile the stable proposal/message ID first. Risk Manager and Execution must not subscribe to
 this research topic. This is an event-transport boundary, not a strategy evaluation or trading
 authorization.
+
+An attempted call that fails is not a model `DEFER` or `NO_PROPOSAL` response.
+The separate `LLMCallFailureV1` research receipt requires caller-attested attempt,
+reservation, failure-class, and actual observation-time metadata. This adapter
+does not currently receive all of that metadata from `BudgetedLLMGateway` on an
+exception, so it cannot honestly construct or publish such a receipt. Late or
+missing failure receipts fail closed at pairing; a pre-registered schedule and
+durable attempt/timeout ledger are still required for a complete matched A/B
+denominator. No provider call is made merely to create a receipt.
 
 ## Failure semantics
 
