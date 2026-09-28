@@ -6,12 +6,19 @@ from dataclasses import replace
 
 import pytest
 from kairos_core import (
+    AdaptiveCandidateProtocolV1,
     CandidateReviewV1,
     EvidenceReferenceV1,
     LLMProposalAction,
+    LLMProposalAdaptiveCandidateArmV1,
     LLMTradeProposalV1,
+    ResearchObservationScheduleV1,
+    ResearchObservationWindowV1,
     RiskTradeDecisionV1,
     StrategyIntentV1,
+    StrategyOnlyAdaptiveCandidateArmV1,
+    StrategyReviewAdaptiveCandidateArmV1,
+    canonical_sha256,
 )
 from kairos_core.topics import Topics
 from pydantic import ValidationError
@@ -25,6 +32,7 @@ from kairos_llm import (
     build_and_publish_llm_trade_proposal,
     build_llm_proposal_completion_receipt,
     build_llm_trade_proposal,
+    build_preregistered_adaptive_llm_proposal,
     proposal_evidence_id,
 )
 
@@ -92,6 +100,62 @@ def _result(
     )
 
 
+def _adaptive_schedule(*, evaluator_sha256: str = "1" * 64) -> ResearchObservationScheduleV1:
+    context = _context()
+    return ResearchObservationScheduleV1(
+        campaign_id=context.campaign_id,
+        strategy_id="adaptive-strategy",
+        strategy_revision="candidate-set-v1",
+        source_set_sha256="0" * 64,
+        evaluator_sha256=evaluator_sha256,
+        windows=(
+            ResearchObservationWindowV1(
+                sample_id=context.sample_id,
+                symbol=context.symbol,
+                timeframe=context.timeframe,
+                market_as_of_ts_ms=context.market_as_of_ts_ms,
+                market_snapshot_sha256=context.market_snapshot_sha256,
+                paired_at_ts_ms=context.market_as_of_ts_ms + 100,
+                sample_deadline_ts_ms=context.expires_at_ts_ms,
+            ),
+        ),
+    )
+
+
+def _adaptive_protocol(schedule: ResearchObservationScheduleV1) -> AdaptiveCandidateProtocolV1:
+    common = {
+        "candidate_revision": "v1",
+        "artifact_sha256": "a" * 64,
+        "input_feature_sha256": "b" * 64,
+        "decision_mapping_sha256": "c" * 64,
+        "hypothetical_exit_sha256": "d" * 64,
+        "cost_model_sha256": "e" * 64,
+    }
+    return AdaptiveCandidateProtocolV1(
+        campaign_id=schedule.campaign_id,
+        schedule_digest=schedule.schedule_digest,
+        arms=(
+            StrategyOnlyAdaptiveCandidateArmV1(candidate_id="strategy-v1", **common),
+            StrategyReviewAdaptiveCandidateArmV1(
+                candidate_id="review-v1",
+                **common,
+                provider="openai",
+                model="gpt-6-sol",
+                prompt_sha256="c" * 64,
+                schema_sha256="1" * 64,
+            ),
+            LLMProposalAdaptiveCandidateArmV1(
+                candidate_id="proposal-v1",
+                **common,
+                provider="openai",
+                model="gpt-6-sol",
+                prompt_sha256="c" * 64,
+                schema_sha256=canonical_sha256(LLMProposalOutputV1.model_json_schema()),
+            ),
+        ),
+    )
+
+
 class _RecordingProposalBus:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
@@ -143,6 +207,95 @@ def test_adapter_builds_advisory_contract_from_trusted_context_and_gateway_metad
     for execution_type in (StrategyIntentV1, CandidateReviewV1, RiskTradeDecisionV1):
         with pytest.raises(ValidationError):
             execution_type.model_validate(proposal.model_dump(mode="python"))
+
+
+def test_adaptive_adapter_binds_proposal_to_preregistered_protocol():
+    context = replace(_context(), arm_id="llm-proposal-research")
+    schedule = _adaptive_schedule()
+    protocol = _adaptive_protocol(schedule)
+
+    proposal = build_preregistered_adaptive_llm_proposal(
+        schedule=schedule,
+        protocol=protocol,
+        context=context,
+        result=replace(_result(), model="gpt-6-sol", resolved_model="gpt-6-sol"),
+        input_feature_sha256="b" * 64,
+    )
+
+    assert proposal.campaign_id == protocol.campaign_id
+    assert proposal.arm_id == "llm-proposal-research"
+    assert type(proposal) is LLMTradeProposalV1
+    for execution_type in (StrategyIntentV1, CandidateReviewV1, RiskTradeDecisionV1):
+        with pytest.raises(ValidationError):
+            execution_type.model_validate(proposal.model_dump(mode="python"))
+
+
+def test_adaptive_adapter_rejects_schedule_digest_drift():
+    context = replace(_context(), arm_id="llm-proposal-research")
+    preregistered_schedule = _adaptive_schedule()
+    protocol = _adaptive_protocol(preregistered_schedule)
+    changed_schedule = _adaptive_schedule(evaluator_sha256="2" * 64)
+
+    with pytest.raises(LLMBadOutput, match="schedule differs"):
+        build_preregistered_adaptive_llm_proposal(
+            schedule=changed_schedule,
+            protocol=protocol,
+            context=context,
+            result=replace(_result(), model="gpt-6-sol", resolved_model="gpt-6-sol"),
+            input_feature_sha256="b" * 64,
+        )
+
+
+@pytest.mark.parametrize(
+    ("context_changes", "result_changes", "input_feature_sha256", "protocol_changes", "error"),
+    [
+        ({"campaign_id": "other-campaign"}, {}, "b" * 64, {}, "campaign differs"),
+        ({"arm_id": "llm-proposal"}, {}, "b" * 64, {}, "frozen llm-proposal-research arm"),
+        ({"sample_id": "sample-0002"}, {}, "b" * 64, {}, "not present"),
+        ({"timeframe": "5m"}, {}, "b" * 64, {}, "input window differs"),
+        ({}, {"model": "gpt-6-luna"}, "b" * 64, {}, "gateway route differs"),
+        ({}, {"resolved_model": "gpt-6-sol-2026-09-01"}, "b" * 64, {}, "gateway route differs"),
+        ({}, {"provider": "deepseek"}, "b" * 64, {}, "gateway route differs"),
+        ({"prompt_sha256": "9" * 64}, {}, "b" * 64, {}, "prompt differs"),
+        ({}, {}, "8" * 64, {}, "input features differ"),
+        (
+            {},
+            {},
+            "b" * 64,
+            {"schema_sha256": "7" * 64},
+            "output schema differs",
+        ),
+    ],
+)
+def test_adaptive_adapter_rejects_protocol_or_request_drift(
+    context_changes: dict[str, str],
+    result_changes: dict[str, str],
+    input_feature_sha256: str,
+    protocol_changes: dict[str, str],
+    error: str,
+):
+    context_values = {"arm_id": "llm-proposal-research", **context_changes}
+    context = replace(_context(), **context_values)
+    schedule = _adaptive_schedule()
+    protocol = _adaptive_protocol(schedule)
+    if protocol_changes:
+        arms = list(protocol.arms)
+        arms[2] = arms[2].model_copy(update=protocol_changes)
+        protocol = AdaptiveCandidateProtocolV1(
+            campaign_id=protocol.campaign_id,
+            schedule_digest=protocol.schedule_digest,
+            arms=tuple(arms),  # type: ignore[arg-type]
+        )
+    result_values = {"model": "gpt-6-sol", "resolved_model": "gpt-6-sol", **result_changes}
+
+    with pytest.raises(LLMBadOutput, match=error):
+        build_preregistered_adaptive_llm_proposal(
+            schedule=schedule,
+            protocol=protocol,
+            context=context,
+            result=replace(_result(), **result_values),
+            input_feature_sha256=input_feature_sha256,
+        )
 
 
 @pytest.mark.parametrize(

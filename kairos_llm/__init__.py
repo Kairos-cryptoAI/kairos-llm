@@ -29,6 +29,7 @@ from .proposals import (
     build_and_publish_llm_trade_proposal,
     build_llm_proposal_completion_receipt,
     build_llm_trade_proposal,
+    build_preregistered_adaptive_llm_proposal,
     proposal_evidence_id,
 )
 from .schemas import LLMResult, TokenUsage
@@ -57,6 +58,7 @@ __all__ = [
     "LLMProposalOutputV1",
     "LLMProposalContext",
     "build_and_publish_llm_trade_proposal",
+    "build_preregistered_adaptive_llm_proposal",
     "build_llm_trade_proposal",
     "build_llm_proposal_completion_receipt",
     "proposal_evidence_id",

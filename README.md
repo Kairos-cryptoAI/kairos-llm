@@ -86,6 +86,19 @@ an exact recomputation of the proposal from the gateway result. The separate
 receipt allows a SIM research pair to reject a model answer that arrived after
 its scheduled decision time; the model cannot supply its own timing metadata.
 
+For a preregistered adaptive-candidate SIM campaign,
+`build_preregistered_adaptive_llm_proposal` additionally binds proposal creation
+to the frozen `AdaptiveCandidateProtocolV1`: campaign and arm, exact provider and
+requested/resolved model, prompt hash, output-schema hash, and caller-supplied
+feature hash must match the preregistered LLM-proposal arm. The supplied
+`ResearchObservationScheduleV1` must have the protocol's exact digest and the
+proposal must match one scheduled sample's symbol, timeframe, decision clock,
+deadline, and (when precommitted) market snapshot hash. A changed route,
+prompt, schema, or feature set requires a new protocol revision rather than
+being silently mixed into the campaign. This check makes no provider call and
+does not admit results to the campaign by itself; durable sample recording and
+coverage sealing remain Persistence's responsibility.
+
 The adapter returns only `LLMTradeProposalV1`, a research record—not `StrategyIntentV1`,
 `CandidateReviewV1`, `RiskTradeDecisionV1`, or an order. The opt-in
 `build_and_publish_llm_trade_proposal` helper publishes an already completed, validated result

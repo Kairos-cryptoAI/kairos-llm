@@ -16,11 +16,14 @@ from dataclasses import dataclass
 from typing import Annotated, Literal, Protocol
 
 from kairos_core import (
+    AdaptiveCandidateProtocolV1,
     EvidenceReferenceV1,
     LLMProposalAction,
+    LLMProposalAdaptiveCandidateArmV1,
     LLMProposalCompletionReceiptV1,
     LLMProposalModelProvenanceV1,
     LLMTradeProposalV1,
+    ResearchObservationScheduleV1,
     canonical_sha256,
 )
 from kairos_core.topics import Topics
@@ -223,6 +226,68 @@ async def build_and_publish_llm_trade_proposal(
     if published_message_id != proposal.message_id:
         raise RuntimeError("proposal publisher returned a different message ID; reconcile before retrying")
     return proposal
+
+
+def build_preregistered_adaptive_llm_proposal(
+    *,
+    schedule: ResearchObservationScheduleV1,
+    protocol: AdaptiveCandidateProtocolV1,
+    context: LLMProposalContext,
+    result: LLMResult,
+    input_feature_sha256: str,
+) -> LLMTradeProposalV1:
+    """Build a proposal only when it matches the frozen adaptive LLM arm.
+
+    This is an adapter check, not an evaluation or trading decision. The
+    protocol is preregistered separately in SIM persistence; this function
+    binds the exact proposal request to its campaign, arm, input, provider/model
+    route, prompt, and output schema. It performs no model call.
+    """
+
+    if context.campaign_id != protocol.campaign_id:
+        raise LLMBadOutput("proposal campaign differs from the preregistered adaptive protocol")
+    if schedule.campaign_id != protocol.campaign_id or schedule.schedule_digest != protocol.schedule_digest:
+        raise LLMBadOutput("proposal schedule differs from the preregistered adaptive protocol")
+    if context.arm_id != "llm-proposal-research":
+        raise LLMBadOutput("adaptive proposal must use the frozen llm-proposal-research arm")
+    window = next((item for item in schedule.windows if item.sample_id == context.sample_id), None)
+    if window is None:
+        raise LLMBadOutput("proposal sample is not present in the preregistered adaptive schedule")
+    if (
+        context.symbol != window.symbol
+        or context.timeframe != window.timeframe
+        or context.market_as_of_ts_ms != window.market_as_of_ts_ms
+        or context.expires_at_ts_ms != window.sample_deadline_ts_ms
+        or (
+            window.market_snapshot_sha256 is not None
+            and context.market_snapshot_sha256 != window.market_snapshot_sha256
+        )
+    ):
+        raise LLMBadOutput("proposal input window differs from its preregistered adaptive schedule")
+    proposal_arm = next(
+        (arm for arm in protocol.arms if arm.arm_id == "llm-proposal-research"),
+        None,
+    )
+    if not isinstance(proposal_arm, LLMProposalAdaptiveCandidateArmV1):
+        raise LLMBadOutput("preregistered adaptive protocol has no LLM proposal arm")
+
+    provider = _required_metadata(result.provider, "provider")
+    requested_model = _required_metadata(result.model, "requested model")
+    resolved_model = _required_metadata(result.resolved_model, "resolved model")
+    if (
+        provider != proposal_arm.provider
+        or requested_model != proposal_arm.model
+        or resolved_model != proposal_arm.model
+    ):
+        raise LLMBadOutput("gateway route differs from the preregistered adaptive proposal arm")
+    if context.prompt_sha256 != proposal_arm.prompt_sha256:
+        raise LLMBadOutput("proposal prompt differs from the preregistered adaptive proposal arm")
+    if input_feature_sha256 != proposal_arm.input_feature_sha256:
+        raise LLMBadOutput("proposal input features differ from the preregistered adaptive proposal arm")
+    if canonical_sha256(LLMProposalOutputV1.model_json_schema()) != proposal_arm.schema_sha256:
+        raise LLMBadOutput("proposal output schema differs from the preregistered adaptive proposal arm")
+
+    return build_llm_trade_proposal(context=context, result=result)
 
 
 def _validated_output(result: LLMResult) -> LLMProposalOutputV1:
