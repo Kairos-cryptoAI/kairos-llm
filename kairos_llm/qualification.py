@@ -15,7 +15,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .budget import MINIMUM_INPUT_TOKEN_RESERVATION, BudgetedLLMGateway, LLMUsageBudget
 from .config import LLMSettings
@@ -37,6 +37,8 @@ class ProbeStatus(StrEnum):
 
 
 class ProbePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     protocol: Literal["KAIROS_LLM_PROBE_V1"]
     arithmetic: Literal[42]
     decision: Literal["NO_TRADE"]
@@ -196,6 +198,32 @@ def _quota_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return {key.lower(): str(value) for key, value in headers.items() if key.lower().startswith(prefixes)}
 
 
+def _positive_openai_rate_limit(headers: Mapping[str, str]) -> bool:
+    """A retry hint or limit definition is not remaining request capacity."""
+    normalized = {key.lower(): value for key, value in headers.items()}
+    if "retry-after" in normalized:
+        return False
+    remaining = normalized.get("x-ratelimit-remaining-requests")
+    if remaining is None:
+        return False
+    try:
+        if int(remaining) <= 0:
+            return False
+        return all(
+            int(value) > 0
+            for key, value in normalized.items()
+            if key.startswith("x-ratelimit-remaining-") and key.endswith("tokens")
+        )
+    except ValueError:
+        return False
+
+
+def _deepseek_balance_status(payload: Any) -> ProbeStatus:
+    if not isinstance(payload, dict) or type(payload.get("is_available")) is not bool:
+        return ProbeStatus.BLOCKED
+    return ProbeStatus.PASS if payload["is_available"] else ProbeStatus.FAIL
+
+
 def _safe_error(exc: Exception, secrets: Sequence[str]) -> str:
     rendered = f"{type(exc).__name__}: {exc}"
     for secret in secrets:
@@ -212,6 +240,12 @@ def _validate_result(result: LLMResult, workload: LLMWorkload) -> None:
         raise ValueError("gateway returned a different workload identity")
     if not isinstance(result.parsed, ProbePayload):
         raise ValueError("gateway did not return the exact qualification schema")
+    try:
+        raw_payload = ProbePayload.model_validate_json(result.content)
+    except ValidationError as exc:
+        raise ValueError("provider response did not match the exact qualification schema") from exc
+    if raw_payload != result.parsed:
+        raise ValueError("provider response and parsed qualification payload disagree")
     if result.resolved_model is None or not result.resolved_model.strip():
         raise ValueError("provider omitted resolved model identity")
     usage = result.usage
@@ -303,7 +337,7 @@ async def qualify_llms(
                 result = await runner(workload)
                 _validate_result(result, workload)
                 inference_quota_headers.setdefault(route.choice.provider, {}).update(
-                    result.rate_limit_headers
+                    _quota_headers(result.rate_limit_headers)
                 )
                 calls.append(
                     ModelCallObservation(
@@ -349,13 +383,18 @@ async def qualify_llms(
     for observation in quotas:
         provider = Provider(observation.provider)
         inference_headers = inference_quota_headers.get(provider, {})
-        if inference_headers:
+        if inference_headers and provider is Provider.OPENAI:
+            positive = _positive_openai_rate_limit(inference_headers)
             reconciled_quotas.append(
                 replace(
                     observation,
-                    status=ProbeStatus.PASS,
+                    status=ProbeStatus.PASS if positive else ProbeStatus.BLOCKED,
                     headers=dict(sorted(inference_headers.items())),
-                    detail=f"observed inference quota headers: {sorted(inference_headers)}",
+                    detail=(
+                        f"observed positive inference rate-limit capacity: {sorted(inference_headers)}"
+                        if positive
+                        else "inference headers did not prove positive remaining request capacity"
+                    ),
                 )
             )
         elif observation.status is ProbeStatus.FAIL and provider in successful_providers:
@@ -390,6 +429,8 @@ async def qualify_llms(
             reasons.append("quality_below_threshold")
         if latency is None or latency > policy["maximum_p95_latency_s"]:
             reasons.append("latency_above_threshold")
+        if len({item.resolved_model for item in successful}) > 1:
+            reasons.append("resolved_model_changed_within_probe")
         status = (
             ProbeStatus.PASS
             if not reasons
@@ -469,6 +510,8 @@ async def qualify_live_llms(
     settings = LLMSettings(
         openai_api_key=openai_api_key,
         deepseek_api_key=deepseek_api_key,
+        openai_base_url="https://api.openai.com/v1",
+        deepseek_base_url="https://api.deepseek.com",
         max_retries=0,
         max_output_tokens=QUALIFICATION_MAX_OUTPUT_TOKENS,
         request_timeout_s=30,
@@ -495,12 +538,12 @@ async def qualify_live_llms(
         )
         if base is None:  # pragma: no cover - guarded by the configured defaults
             raise ValueError(f"{provider.value} base URL is missing")
-        url = f"{base.rstrip('/')}/models"
+        url = f"{base.rstrip('/')}/{'models' if provider is Provider.OPENAI else 'user/balance'}"
         timeout = aiohttp.ClientTimeout(total=settings.request_timeout_s)
         started = asyncio.get_running_loop().time()
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers={"Authorization": f"Bearer {key}"}) as response:
-                await response.read()
+                body = await response.read()
                 latency_ms = (asyncio.get_running_loop().time() - started) * 1000
                 headers = _quota_headers(response.headers)
                 if response.status != 200:
@@ -510,18 +553,36 @@ async def qualify_live_llms(
                         response.status,
                         latency_ms,
                         headers,
-                        "authenticated model-list probe did not return HTTP 200",
+                        "authenticated provider preflight did not return HTTP 200",
                     )
+                if provider is Provider.DEEPSEEK:
+                    try:
+                        balance_status = _deepseek_balance_status(json.loads(body))
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        balance_status = ProbeStatus.BLOCKED
+                    return QuotaObservation(
+                        provider.value,
+                        balance_status,
+                        response.status,
+                        latency_ms,
+                        {},
+                        {
+                            ProbeStatus.PASS: "DeepSeek reports balance available",
+                            ProbeStatus.BLOCKED: "DeepSeek balance response was not verifiable",
+                            ProbeStatus.FAIL: "DeepSeek reports balance unavailable",
+                        }[balance_status],
+                    )
+                positive = _positive_openai_rate_limit(headers)
                 return QuotaObservation(
                     provider.value,
-                    ProbeStatus.PASS if headers else ProbeStatus.BLOCKED,
+                    ProbeStatus.PASS if positive else ProbeStatus.BLOCKED,
                     response.status,
                     latency_ms,
                     headers,
                     (
-                        f"observed quota headers: {sorted(headers)}"
-                        if headers
-                        else "provider emitted no quota headers; effective quota is unverified"
+                        f"observed positive remaining request capacity: {sorted(headers)}"
+                        if positive
+                        else "provider rate-limit headers did not prove remaining request capacity"
                     ),
                 )
 
@@ -574,6 +635,7 @@ def _write_report(path: Path, report: LLMQualificationReport, *, overwrite: bool
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Qualify all Kairos LLM workload routes")
+    parser.add_argument("--expected-database-name", required=True)
     parser.add_argument("--openai-key-file", type=Path)
     parser.add_argument("--deepseek-key-file", type=Path)
     parser.add_argument("--samples", type=int, default=2)
@@ -603,11 +665,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         Database,
         SourceStateRepository,
     )
+    from kairos_persistence.config import PersistenceSettings
+    from kairos_persistence.database_target import connect_verified_database
 
     async def run() -> LLMQualificationReport:
-        database = Database()
+        if not os.environ.get("KAIROS_PERSISTENCE_DATABASE_URL"):
+            raise ValueError("paid qualification requires an explicit campaign database URL")
+        database = Database(PersistenceSettings())
         try:
-            await database.connect()
+            await connect_verified_database(database, args.expected_database_name)
+            await database.verify_schema()
             repository = SourceStateRepository(database.pool, campaign_id=QUALIFICATION_CAMPAIGN_ID)
             selected = tuple(LLMWorkload(item) for item in args.workload) if args.workload else None
             for provider in {

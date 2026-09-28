@@ -141,6 +141,7 @@ Keep provider keys in local secret files and run the non-trading contract probe:
 
 ```powershell
 uv run --locked kairos-llm-qualify `
+  --expected-database-name kairos `
   --openai-key-file D:\Kairos\secrets\openai_api_key `
   --deepseek-key-file D:\Kairos\secrets\deepseek_api_key `
   --samples 2 `
@@ -150,10 +151,24 @@ uv run --locked kairos-llm-qualify `
 
 The tool checks every workload route with an exact structured `NO_TRADE` response,
 records requested and resolved model identities, fingerprint, token usage, latency and
-estimated price-table cost, and probes each provider's authenticated model-list endpoint
-for observable quota headers. Keys are never accepted on argv or written to evidence.
+estimated price-table cost. OpenAI's authenticated model-list check requires positive
+remaining request capacity in its rate-limit headers; DeepSeek's read-only balance check
+uses only its `is_available` flag and never records balance amounts. Credential-bearing
+qualification requests are pinned to the official provider HTTPS endpoints even if a
+service `.env` overrides its normal gateway URL. Keys are never accepted on argv or written
+to evidence.
+The CLI requires an explicit `KAIROS_PERSISTENCE_DATABASE_URL`, checks the literal and
+connected database name, verifies the complete current migration profile, and requires
+the registered shared campaign before reading keys or sending requests. The operator
+must still confirm that this URL and container/network refer to the authoritative
+`kairos-shadow-gate` database, not PAPER or a restored clone; a matching SQL database
+name by itself does not prove that operational identity.
 Missing keys make zero billable calls and produce `BLOCKED`; malformed output, model
-alias drift, absent usage, excessive latency/cost, or provider errors fail closed. The
+resolution changes within one probe, absent usage, excessive latency/cost, or provider
+errors fail closed. A new resolved backend between runs still requires explicit review; this
+probe does not maintain a cross-run allow-list. A failed or ambiguous inference can retain
+a durable reservation even when the report has no measured cost, so reconcile
+`campaign_usage` after every attempt. The
 probe validates API mechanics only—not market reasoning quality—and its report always
 contains `live_orders_allowed=false`.
 
@@ -163,6 +178,7 @@ exceeds the supplied ceiling; the default ceiling is `$0.05`:
 
 ```powershell
 uv run --locked kairos-llm-qualify `
+  --expected-database-name kairos `
   --deepseek-key-file D:\Kairos\secrets\deepseek_api_key `
   --workload text_scouts `
   --samples 1 `
