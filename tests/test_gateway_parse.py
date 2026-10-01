@@ -30,7 +30,8 @@ class SentimentOutput(BaseModel):
 
 def _legacy_deepseek_router():
     return ModelRouter(
-        mapping={effort: ModelChoice("deepseek-flash", Provider.DEEPSEEK) for effort in ReasoningEffort}
+        mapping={effort: ModelChoice("deepseek-flash", Provider.DEEPSEEK) for effort in ReasoningEffort},
+        allowed_providers={Provider.OPENAI, Provider.DEEPSEEK},
     )
 
 
@@ -192,7 +193,10 @@ def test_deepseek_explicitly_disables_default_thinking():
         workload=LLMWorkload.TEXT_SCOUTS,
         max_output_tokens=1_024,
     )
-    router = ModelRouter(workload_mapping=workload_routes)
+    router = ModelRouter(
+        workload_mapping=workload_routes,
+        allowed_providers={Provider.OPENAI, Provider.DEEPSEEK},
+    )
     gateway = LLMGateway(router=router, client=client)
 
     result = asyncio.run(gateway.complete(system="return json", user="u", workload=LLMWorkload.TEXT_SCOUTS))

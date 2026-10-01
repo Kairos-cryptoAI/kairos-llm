@@ -100,11 +100,28 @@ class ModelRouter:
         self,
         mapping: dict[ReasoningEffort, ModelChoice] | None = None,
         workload_mapping: dict[LLMWorkload, ModelRoute] | None = None,
+        *,
+        allowed_providers: set[Provider] | frozenset[Provider] | None = None,
     ) -> None:
         self._map = dict(DEFAULT_MAP) if mapping is None else dict(mapping)
         self._workload_map = (
             dict(DEFAULT_WORKLOAD_ROUTES) if workload_mapping is None else dict(workload_mapping)
         )
+        self._allowed_providers = (
+            frozenset({Provider.OPENAI}) if allowed_providers is None else frozenset(allowed_providers)
+        )
+        if not self._allowed_providers:
+            raise ValueError("allowed_providers must not be empty")
+        for choice in self._map.values():
+            self._validate_provider(choice.provider)
+        for route in self._workload_map.values():
+            self._validate_provider(route.choice.provider)
+
+    def _validate_provider(self, provider: Provider) -> None:
+        if provider not in self._allowed_providers:
+            raise ValueError(
+                f"provider {provider.value!r} is not enabled; add it to allowed_providers explicitly"
+            )
 
     def choose(
         self,
@@ -138,6 +155,7 @@ class ModelRouter:
         provider_effort: str | None = None,
     ) -> None:
         """Override a legacy effort fallback without altering workload routes."""
+        self._validate_provider(provider)
         self._map[effort] = ModelChoice(model, provider, provider_effort)
 
     def override_workload(
@@ -150,6 +168,7 @@ class ModelRouter:
         max_output_tokens: int = 8_192,
     ) -> None:
         """Override one explicit workload without coupling it to other roles."""
+        self._validate_provider(provider)
         self._workload_map[workload] = ModelRoute(
             choice=ModelChoice(model, provider, provider_effort),
             effort=effort,

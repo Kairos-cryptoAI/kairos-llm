@@ -84,15 +84,43 @@ def test_all_default_workload_routes_are_openai_only():
 
 def test_workload_route_is_independent_of_legacy_effort_override():
     router = ModelRouter()
-    router.override(ReasoningEffort.MEDIUM, "legacy-override", Provider.DEEPSEEK)
+    router.override(ReasoningEffort.MEDIUM, "legacy-override", Provider.OPENAI)
 
     assert router.choose(ReasoningEffort.MEDIUM).model == "legacy-override"
     assert router.choose(ReasoningEffort.MEDIUM, workload=LLMWorkload.AGGREGATOR_NORMAL).model == "gpt-6-luna"
 
 
+def test_non_openai_provider_requires_explicit_opt_in():
+    router = ModelRouter()
+
+    with pytest.raises(ValueError, match="not enabled"):
+        router.override(ReasoningEffort.MEDIUM, "deepseek-flash", Provider.DEEPSEEK)
+
+    router = ModelRouter(allowed_providers={Provider.OPENAI, Provider.DEEPSEEK})
+    router.override(ReasoningEffort.MEDIUM, "deepseek-flash", Provider.DEEPSEEK)
+    assert router.choose(ReasoningEffort.MEDIUM).provider is Provider.DEEPSEEK
+
+
+def test_non_openai_provider_routes_require_explicit_opt_in_at_construction():
+    routes = dict(DEFAULT_WORKLOAD_ROUTES)
+    routes[LLMWorkload.TEXT_SCOUTS] = ModelRoute(
+        ModelChoice("deepseek-flash", Provider.DEEPSEEK),
+        ReasoningEffort.LOW,
+        LLMWorkload.TEXT_SCOUTS,
+    )
+
+    with pytest.raises(ValueError, match="not enabled"):
+        ModelRouter(workload_mapping=routes)
+
+
 def test_route_requires_workload_or_effort():
     with pytest.raises(ValueError, match="workload or effort"):
         ModelRouter().resolve()
+
+
+def test_router_requires_at_least_one_allowed_provider():
+    with pytest.raises(ValueError, match="must not be empty"):
+        ModelRouter(allowed_providers=set())
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, 1.5])
