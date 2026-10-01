@@ -33,8 +33,8 @@ class LLMWorkload(StrEnum):
 class ModelChoice:
     model: str
     provider: Provider
-    # OpenAI reasoning.effort value. DeepSeek Text Scouts calls disable
-    # thinking explicitly in the provider adapter instead of passing this.
+    # OpenAI reasoning.effort value. Explicit DeepSeek overrides disable
+    # thinking in the provider adapter instead of passing this.
     provider_effort: str | None = None
 
     @property
@@ -62,7 +62,7 @@ class ModelRoute:
 
 DEFAULT_WORKLOAD_ROUTES: dict[LLMWorkload, ModelRoute] = {
     LLMWorkload.TEXT_SCOUTS: ModelRoute(
-        ModelChoice("deepseek-flash", Provider.DEEPSEEK),
+        ModelChoice("gpt-6-luna", Provider.OPENAI, "low"),
         ReasoningEffort.LOW,
         LLMWorkload.TEXT_SCOUTS,
         1_024,

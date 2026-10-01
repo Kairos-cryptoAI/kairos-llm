@@ -13,12 +13,25 @@ from pydantic import BaseModel
 from kairos_llm.config import LLMSettings
 from kairos_llm.errors import LLMBadOutput, LLMServerError, LLMTimeout
 from kairos_llm.gateway import LLMGateway
-from kairos_llm.models import LLMWorkload
+from kairos_llm.models import (
+    DEFAULT_WORKLOAD_ROUTES,
+    LLMWorkload,
+    ModelChoice,
+    ModelRoute,
+    ModelRouter,
+    Provider,
+)
 
 
 class SentimentOutput(BaseModel):
     sentiment: float
     impact: str
+
+
+def _legacy_deepseek_router():
+    return ModelRouter(
+        mapping={effort: ModelChoice("deepseek-flash", Provider.DEEPSEEK) for effort in ReasoningEffort}
+    )
 
 
 class _FakeCompletions:
@@ -91,7 +104,8 @@ class _FakeClient:
 
 def test_deepseek_parses_json_and_accounts_cost():
     client = _FakeClient('{"sentiment": 0.85, "impact": "bullish"}')
-    gateway = LLMGateway(client=client)
+    router = _legacy_deepseek_router()
+    gateway = LLMGateway(router=router, client=client)
 
     result = asyncio.run(gateway.complete(system="return json", user="u", effort=ReasoningEffort.LOW))
 
@@ -155,6 +169,7 @@ def test_gateway_retains_only_rate_limit_headers():
 def test_bad_json_raises_without_recording_success():
     events = []
     gateway = LLMGateway(
+        router=_legacy_deepseek_router(),
         settings=LLMSettings(max_retries=3),
         client=_FakeClient("not json"),
         on_health=lambda *args: events.append(args),
@@ -170,7 +185,15 @@ def test_bad_json_raises_without_recording_success():
 
 def test_deepseek_explicitly_disables_default_thinking():
     client = _FakeClient('{"ok": true}')
-    gateway = LLMGateway(client=client)
+    workload_routes = dict(DEFAULT_WORKLOAD_ROUTES)
+    workload_routes[LLMWorkload.TEXT_SCOUTS] = ModelRoute(
+        choice=ModelChoice("deepseek-flash", Provider.DEEPSEEK),
+        effort=ReasoningEffort.LOW,
+        workload=LLMWorkload.TEXT_SCOUTS,
+        max_output_tokens=1_024,
+    )
+    router = ModelRouter(workload_mapping=workload_routes)
+    gateway = LLMGateway(router=router, client=client)
 
     result = asyncio.run(gateway.complete(system="return json", user="u", workload=LLMWorkload.TEXT_SCOUTS))
 
@@ -184,7 +207,11 @@ def test_deepseek_explicitly_disables_default_thinking():
 
 def test_health_hook_fires_after_validated_success():
     events = []
-    gateway = LLMGateway(client=_FakeClient('{"x": 1}'), on_health=lambda *args: events.append(args))
+    gateway = LLMGateway(
+        router=_legacy_deepseek_router(),
+        client=_FakeClient('{"x": 1}'),
+        on_health=lambda *args: events.append(args),
+    )
 
     asyncio.run(gateway.complete(system="return json", user="u", effort=ReasoningEffort.LOW))
 
@@ -197,7 +224,7 @@ def test_health_sink_failure_does_not_repeat_a_paid_call():
     def broken_health_sink(*_args):
         raise RuntimeError("telemetry unavailable")
 
-    gateway = LLMGateway(client=client, on_health=broken_health_sink)
+    gateway = LLMGateway(router=_legacy_deepseek_router(), client=client, on_health=broken_health_sink)
     result = asyncio.run(gateway.complete(system="return json", user="u", effort=ReasoningEffort.LOW))
 
     assert result.parsed == {"x": 1}
@@ -227,6 +254,7 @@ def test_health_hook_fires_on_5xx():
 def test_health_hook_fires_on_timeout():
     events = []
     gateway = LLMGateway(
+        router=_legacy_deepseek_router(),
         settings=LLMSettings(max_retries=0),
         client=_FakeClient("{}", error=TimeoutError()),
         on_health=lambda *args: events.append(args),
@@ -298,6 +326,7 @@ def test_programming_error_fails_fast():
     events = []
     client = _FakeClient("{}", error=ValueError("client adapter bug"))
     gateway = LLMGateway(
+        router=_legacy_deepseek_router(),
         settings=LLMSettings(max_retries=3),
         client=client,
         on_health=lambda *args: events.append(args),
@@ -315,6 +344,7 @@ def test_status_shaped_programming_error_fails_fast():
     error = _ProviderFailure(status=503)
     client = _FakeClient("{}", error=error)
     gateway = LLMGateway(
+        router=_legacy_deepseek_router(),
         settings=LLMSettings(max_retries=3),
         client=client,
         on_health=lambda *args: events.append(args),
@@ -347,6 +377,7 @@ def test_transient_http_failures_retry_then_succeed(monkeypatch, error):
     events = []
     client = _FakeClient('{"ok": true}', error=[error])
     gateway = LLMGateway(
+        router=_legacy_deepseek_router(),
         settings=LLMSettings(max_retries=2),
         client=client,
         on_health=lambda *args: events.append(args),
@@ -370,7 +401,11 @@ def test_network_failure_retries_then_succeeds(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", record_sleep)
     request = httpx.Request("POST", "https://provider.invalid/v1/chat/completions")
     client = _FakeClient('{"ok": true}', error=[APIConnectionError(request=request)])
-    gateway = LLMGateway(settings=LLMSettings(max_retries=2), client=client)
+    gateway = LLMGateway(
+        router=_legacy_deepseek_router(),
+        settings=LLMSettings(max_retries=2),
+        client=client,
+    )
 
     result = asyncio.run(gateway.complete(system="s", user="u", effort=ReasoningEffort.LOW))
 
@@ -414,6 +449,7 @@ def test_connection_failure_exhausts_budget_as_breaker_outage(monkeypatch):
     request = httpx.Request("POST", "https://provider.invalid/v1/chat/completions")
     client = _FakeClient("{}", error=APIConnectionError(request=request))
     gateway = LLMGateway(
+        router=_legacy_deepseek_router(),
         settings=LLMSettings(max_retries=2),
         client=client,
         on_health=lambda *args: events.append(args),

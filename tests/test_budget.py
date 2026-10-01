@@ -76,23 +76,22 @@ async def test_reserves_before_call_and_commits_rounded_actual_cost():
     )
 
     assert result.workload == LLMWorkload.TEXT_SCOUTS.value
-    assert result.provider == Provider.DEEPSEEK.value
+    assert result.provider == Provider.OPENAI.value
     assert result.request_id == "provider-request-123"
     assert len(underlying.calls) == 1
     reservation = budget.reservations[0]
-    assert reservation["provider"] == Provider.DEEPSEEK.value
-    assert reservation["monthly_budget_microusd"] == 1_000_000
-    assert reservation["reserved_microusd"] == 2458
-    assert reservation["reservation_id"].startswith("kairos-llm-v1:deepseek:")
+    assert reservation["provider"] == Provider.OPENAI.value
+    assert reservation["monthly_budget_microusd"] == 12_000_000
+    assert reservation["reservation_id"].startswith("kairos-llm-v1:openai:")
     assert result.budget_reservation_id == reservation["reservation_id"]
     assert result.attempt_started_at_ts_ms is not None
     assert result.response_observed_at_ts_ms is not None
     assert result.attempt_started_at_ts_ms <= result.response_observed_at_ts_ms
     assert budget.commits == [
         {
-            "provider": Provider.DEEPSEEK.value,
+            "provider": Provider.OPENAI.value,
             "reservation_id": reservation["reservation_id"],
-            "actual_microusd": 590,
+            "actual_microusd": 233,
         }
     ]
 

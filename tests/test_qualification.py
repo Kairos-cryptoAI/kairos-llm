@@ -107,7 +107,7 @@ async def test_targeted_workload_calls_only_its_provider_and_route():
     )
 
     assert called_workloads == [LLMWorkload.TEXT_SCOUTS]
-    assert probed_providers == [Provider.DEEPSEEK]
+    assert probed_providers == [Provider.OPENAI]
     assert [item.workload for item in report.calls] == [LLMWorkload.TEXT_SCOUTS.value]
     assert [item.workload for item in report.workloads] == [LLMWorkload.TEXT_SCOUTS.value]
 
@@ -148,15 +148,15 @@ async def test_inference_headers_override_unusable_model_list_quota_probe():
 
 
 def test_planned_cost_ceiling_is_route_specific_and_rejects_bad_selection():
-    deepseek_only = planned_cost_ceiling_usd(
+    text_scouts_only = planned_cost_ceiling_usd(
         workloads=(LLMWorkload.TEXT_SCOUTS,),
         samples_per_workload=1,
     )
     all_routes = planned_cost_ceiling_usd(workloads=None, samples_per_workload=1)
 
-    assert deepseek_only == pytest.approx(0.0013824)
-    assert all_routes == pytest.approx(0.0249984)
-    assert deepseek_only < all_routes
+    assert text_scouts_only == pytest.approx(0.000576)
+    assert all_routes == pytest.approx(0.024192)
+    assert text_scouts_only < all_routes
     with pytest.raises(ValueError, match="duplicates"):
         _selected_workloads((LLMWorkload.TEXT_SCOUTS, LLMWorkload.TEXT_SCOUTS))
     with pytest.raises(ValueError, match="at least one"):
@@ -244,8 +244,8 @@ async def test_live_probe_reserves_and_accounts_through_shared_budget(monkeypatc
 
     monkeypatch.setattr(qualification, "qualify_llms", fake_qualify)
     result = await qualify_live_llms(
-        openai_api_key=None,
-        deepseek_api_key="synthetic-not-dispatched",
+        deepseek_api_key=None,
+        openai_api_key="synthetic-openai-not-dispatched",
         samples_per_workload=1,
         workloads=(LLMWorkload.TEXT_SCOUTS,),
         usage_budget=budget,
@@ -276,7 +276,7 @@ async def test_qualification_pins_official_endpoints_despite_environment(monkeyp
     monkeypatch.setattr(qualification, "qualify_llms", fake_qualify)
     await qualify_live_llms(
         openai_api_key="synthetic-openai",
-        deepseek_api_key="synthetic-deepseek",
+        deepseek_api_key=None,
         samples_per_workload=1,
         workloads=(LLMWorkload.TEXT_SCOUTS,),
         usage_budget=_Budget(),
@@ -301,8 +301,8 @@ async def test_live_probe_budget_failure_cannot_dispatch_provider(monkeypatch):
     monkeypatch.setattr(qualification, "qualify_llms", fake_qualify)
     with pytest.raises(RuntimeError, match="campaign exhausted"):
         await qualify_live_llms(
-            openai_api_key=None,
-            deepseek_api_key="synthetic-not-dispatched",
+            deepseek_api_key=None,
+            openai_api_key="synthetic-openai-not-dispatched",
             samples_per_workload=1,
             workloads=(LLMWorkload.TEXT_SCOUTS,),
             usage_budget=_Budget(RuntimeError("campaign exhausted")),

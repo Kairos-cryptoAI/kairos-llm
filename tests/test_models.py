@@ -1,7 +1,14 @@
 import pytest
 from kairos_core.enums import ReasoningEffort
 
-from kairos_llm.models import LLMWorkload, ModelChoice, ModelRoute, ModelRouter, Provider
+from kairos_llm.models import (
+    DEFAULT_WORKLOAD_ROUTES,
+    LLMWorkload,
+    ModelChoice,
+    ModelRoute,
+    ModelRouter,
+    Provider,
+)
 
 
 @pytest.mark.parametrize(
@@ -9,8 +16,8 @@ from kairos_llm.models import LLMWorkload, ModelChoice, ModelRoute, ModelRouter,
     [
         (
             LLMWorkload.TEXT_SCOUTS,
-            "deepseek-flash",
-            Provider.DEEPSEEK,
+            "gpt-6-luna",
+            Provider.OPENAI,
             ReasoningEffort.LOW,
             1_024,
         ),
@@ -55,7 +62,7 @@ def test_provider_reasoning_modes_match_roles():
     conflict = router.resolve(workload=LLMWorkload.AGGREGATOR_CONFLICT).choice
     macro = router.resolve(workload=LLMWorkload.MACRO_STRATEGIST).choice
 
-    assert text.send_reasoning_effort is False
+    assert text.provider_effort == "low"
     assert normal.provider_effort == "medium"
     assert conflict.provider_effort == "high"
     assert macro.provider_effort == "xhigh"
@@ -64,11 +71,15 @@ def test_provider_reasoning_modes_match_roles():
 def test_effort_only_routing_remains_backward_compatible():
     router = ModelRouter()
 
-    assert router.choose(ReasoningEffort.LOW).model == "deepseek-flash"
+    assert router.choose(ReasoningEffort.LOW).model == "gpt-6-luna"
     assert router.choose(ReasoningEffort.MEDIUM).model == "gpt-6-luna"
     assert router.choose(ReasoningEffort.HIGH).model == "gpt-6-sol"
     assert router.choose(ReasoningEffort.XHIGH).model == "gpt-6-sol"
     assert str(Provider.DEEPSEEK) == "deepseek"
+
+
+def test_all_default_workload_routes_are_openai_only():
+    assert all(route.choice.provider is Provider.OPENAI for route in DEFAULT_WORKLOAD_ROUTES.values())
 
 
 def test_workload_route_is_independent_of_legacy_effort_override():

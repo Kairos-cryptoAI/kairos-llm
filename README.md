@@ -19,7 +19,7 @@ the same logical reasoning effort.
 
 | workload | model | provider mode | price / 1M input · cached · cache write · output |
 | --- | --- | --- | --- |
-| `TEXT_SCOUTS` | `deepseek-flash` | non-thinking | $0.30 · $0.006 · $0.30 · $1.20 peak |
+| `TEXT_SCOUTS` | `gpt-6-luna` | `low` | $0.10 · $0.01 · $0.125 · $0.50 |
 | `AGGREGATOR_NORMAL` | `gpt-6-luna` | `medium` | $0.10 · $0.01 · $0.125 · $0.50 |
 | `AGGREGATOR_CONFLICT` | `gpt-6-sol` | `high` | $2.00 · $0.20 · $2.50 · $10.00 |
 | `MACRO_STRATEGIST` | `gpt-6-sol` | `xhigh` | $2.00 · $0.20 · $2.50 · $10.00 |
@@ -28,9 +28,9 @@ The original effort-only API remains supported and maps `low`, `medium`, `high`,
 the same four routes. New callers should provide `LLMWorkload`; workload overrides and legacy
 effort overrides are intentionally independent.
 
-OpenAI models use the Responses API with SDK-native Pydantic Structured Outputs. DeepSeek uses
-the official OpenAI-compatible Chat Completions API, explicitly disables thinking for the Text
-Scouts route, and validates JSON locally against the caller's Pydantic schema.
+All default workload routes use OpenAI and the Responses API with SDK-native Pydantic Structured
+Outputs. The DeepSeek adapter remains available only for explicit, non-default overrides; it is
+not selected by any default workload route. Provider support is not evidence of qualification.
 
 ## Usage
 
@@ -66,8 +66,8 @@ result = await gateway.complete(
 `BudgetedLLMGateway` also attaches the exact durable `budget_reservation_id` after the
 reservation is committed. It stamps the call start and observed response time around
 the provider request; direct unbudgeted results leave these fields unset. This distinction matters for
-aliases: Text Scouts sends `deepseek-flash`, while telemetry records the resolved backend
-returned by DeepSeek without hard-coding a provider snapshot as an API model ID.
+aliases: explicit DeepSeek overrides may resolve to a provider backend name, while telemetry
+records the resolved backend without hard-coding a provider snapshot as an API model ID.
 The provider/model fields are included in the `llm.response` structured log event; callers use
 the complete result to persist paid-review provenance without copying secrets or prompts.
 
@@ -126,19 +126,17 @@ otherwise successful, potentially billable provider call.
 
 ## Cost scenario
 
-With the existing planning call/token volumes, no cache hits and conservative DeepSeek peak
-pricing, the role-aware table produces an estimated $58.30/month API scenario at ordinary input
-rates, or $61.25 if every OpenAI input token incurs the higher cache-write rate. Off-peak
-DeepSeek requests are billed lower, but the local ledger deliberately does not depend on
-dispatch time. The budget wrapper reserves at the higher cache-write rate and, when the
-provider omits cache-write usage, accounts every noncached input token as a write. These are
-tested estimates, not a guaranteed budget; actual usage, retries, long-context multipliers
-and provider prices must be monitored.
+The previously recorded `$58.30`/`$61.25` monthly scenario used the former mixed-provider
+defaults and is not an estimate for the current OpenAI-only defaults. Recalculate a campaign
+estimate from its frozen call/token volumes and route-specific prices before enabling paid
+shadow requests. The budget wrapper reserves conservatively and, when a provider omits cache-write
+usage, treats noncached input as cache-write usage. Any estimate is not a guarantee; actual usage,
+retries, long-context multipliers and provider prices must be monitored.
 
 Production callers must wrap `LLMGateway(max_retries=0)` in `BudgetedLLMGateway` and attach a
 durable `LLMUsageBudget`. During shadow qualification the shared provider ceilings are exactly
 `$1.00` for DeepSeek and `$12.00` for OpenAI, leaving the rest of the funded balances outside
-this stage's authority. Before every
+this stage's authority. The DeepSeek ceiling is not used by default routes. Before every
 provider call the wrapper reserves a conservative prompt/schema/output allowance. Successful
 usage is committed in whole microdollars; failures and ambiguous outcomes keep the reservation
 open so a retry cannot silently spend the same capacity twice. Paid calls are denied when no
@@ -156,7 +154,6 @@ Keep provider keys in local secret files and run the non-trading contract probe:
 uv run --locked kairos-llm-qualify `
   --expected-database-name kairos `
   --openai-key-file D:\Kairos\secrets\openai_api_key `
-  --deepseek-key-file D:\Kairos\secrets\deepseek_api_key `
   --samples 2 `
   --output $env:TEMP\kairos-llm-qualification.json `
   --overwrite
@@ -192,11 +189,11 @@ exceeds the supplied ceiling; the default ceiling is `$0.05`:
 ```powershell
 uv run --locked kairos-llm-qualify `
   --expected-database-name kairos `
-  --deepseek-key-file D:\Kairos\secrets\deepseek_api_key `
+  --openai-key-file D:\Kairos\secrets\openai_api_key `
   --workload text_scouts `
   --samples 1 `
-  --maximum-planned-cost-usd 0.002 `
-  --output $env:TEMP\kairos-deepseek-qualification.json
+  --maximum-planned-cost-usd 0.05 `
+  --output $env:TEMP\kairos-openai-text-scout-qualification.json
 ```
 
 ## Local development
