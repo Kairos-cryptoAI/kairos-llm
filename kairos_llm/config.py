@@ -8,13 +8,13 @@ from kairos_core.config import CoreSettings
 class LLMSettings(CoreSettings):
     service_name: str = "kairos-llm"
 
-    # --- OpenAI: GPT-5.6 Sol escalation tier (conflict resolution + macro strategy) ---
+    # --- OpenAI: GPT-6.1 Sol tier (conflict resolution + macro strategy) ---
     openai_api_key: str | None = None  # KAIROS_OPENAI_API_KEY (or OPENAI_API_KEY)
     openai_base_url: str | None = None  # for OpenAI-compatible gateways
 
-    # --- DeepSeek: routine tier (Text Scouts Flash + Aggregator-Normal Pro) ---
+    # --- DeepSeek: opt-in compatibility provider; not used by default routes ---
     # DeepSeek exposes an OpenAI-compatible API, so the same AsyncOpenAI client
-    # works once pointed at this base URL.
+    # works once pointed at this base URL when explicitly enabled.
     deepseek_api_key: str | None = None  # KAIROS_DEEPSEEK_API_KEY
     deepseek_base_url: str = "https://api.deepseek.com"
 

@@ -21,8 +21,8 @@ the same logical reasoning effort.
 | --- | --- | --- | --- |
 | `TEXT_SCOUTS` | `gpt-6-luna` | `low` | $0.10 · $0.01 · $0.125 · $0.50 |
 | `AGGREGATOR_NORMAL` | `gpt-6-luna` | `medium` | $0.10 · $0.01 · $0.125 · $0.50 |
-| `AGGREGATOR_CONFLICT` | `gpt-6-sol` | `high` | $2.00 · $0.20 · $2.50 · $10.00 |
-| `MACRO_STRATEGIST` | `gpt-6-sol` | `xhigh` | $2.00 · $0.20 · $2.50 · $10.00 |
+| `AGGREGATOR_CONFLICT` | `gpt-6.1-sol` | `high` | $2.00 · $0.10 · $2.50 · $10.00 |
+| `MACRO_STRATEGIST` | `gpt-6.1-sol` | `xhigh` | $2.00 · $0.10 · $2.50 · $10.00 |
 
 The original effort-only API remains supported and maps `low`, `medium`, `high`, and `xhigh` to
 the same four routes. New callers should provide `LLMWorkload`; workload overrides and legacy

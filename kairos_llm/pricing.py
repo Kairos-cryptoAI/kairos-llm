@@ -8,6 +8,7 @@ alerts remain conservative regardless of dispatch time:
   * DeepSeek-V4-Pro   : $1.32 in / $0.044 cached / $3.96 out (peak)
   * GPT-6 Luna        : $0.10 in / $0.01 cached / $0.125 cache write / $0.50 out
   * GPT-6 Sol         : $2.00 in / $0.20 cached / $2.50 cache write / $10.00 out
+  * GPT-6.1 Sol       : $2.00 in / $0.10 cached / $2.50 cache write / $10.00 out
   * GPT-5.6 Luna      : $0.20 in / $0.02 cached / $1.20 out
   * GPT-5.6 Terra     : $2.00 in / $0.20 cached / $12.00 out
   * GPT-5.6 Sol       : $4.00 in / $0.40 cached / $20.00 out
@@ -50,6 +51,12 @@ GPT6_SOL_PRICE = ModelPrice(
     output_per_m=10.00,
     cache_write_per_m=2.50,
 )
+GPT61_SOL_PRICE = ModelPrice(
+    input_per_m=2.00,
+    cached_input_per_m=0.10,
+    output_per_m=10.00,
+    cache_write_per_m=2.50,
+)
 # Preserve the public constant and conservative unknown-model fallback.
 GPT56_PRICE = GPT56_SOL_PRICE
 DEFAULT_PRICE = GPT56_SOL_PRICE
@@ -63,6 +70,7 @@ DEFAULT_PRICES: dict[str, ModelPrice] = {
     "deepseek-v4-pro": DEEPSEEK_PRO_PRICE,
     "gpt-6-luna": GPT6_LUNA_PRICE,
     "gpt-6-sol": GPT6_SOL_PRICE,
+    "gpt-6.1-sol": GPT61_SOL_PRICE,
     "gpt-5.6-luna": GPT56_LUNA_PRICE,
     "gpt-5.6-terra": GPT56_TERRA_PRICE,
     "gpt-5.6": GPT56_SOL_PRICE,

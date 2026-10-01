@@ -137,7 +137,7 @@ def test_openai_workload_uses_responses_structured_outputs():
     assert result.parsed == SentimentOutput(sentiment=0.85, impact="bullish")
     assert result.usage.cached_input_tokens == 500
     assert result.usage.cache_write_tokens == 500
-    assert client.response_calls[0]["model"] == "gpt-6-sol"
+    assert client.response_calls[0]["model"] == "gpt-6.1-sol"
     assert client.response_calls[0]["reasoning"] == {"effort": "high"}
     assert client.response_calls[0]["max_output_tokens"] == 4_096
     assert client.response_calls[0]["store"] is False
@@ -146,7 +146,7 @@ def test_openai_workload_uses_responses_structured_outputs():
     assert result.workload == "aggregator_conflict"
     assert result.provider == "openai"
     assert result.request_id == "openai-request-456"
-    assert result.resolved_model == "gpt-6-sol"
+    assert result.resolved_model == "gpt-6.1-sol"
     assert result.system_fingerprint == "fp_openai_test"
     assert result.rate_limit_headers == {}
 
@@ -252,7 +252,7 @@ def test_health_hook_fires_on_5xx():
     with pytest.raises(LLMServerError):
         asyncio.run(gateway.complete(system="s", user="u", effort=ReasoningEffort.HIGH))
 
-    assert events[-1][:4] == ("gpt-6-sol", "openai", False, "5xx")
+    assert events[-1][:4] == ("gpt-6.1-sol", "openai", False, "5xx")
 
 
 def test_health_hook_fires_on_timeout():

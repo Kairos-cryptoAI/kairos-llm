@@ -74,13 +74,13 @@ DEFAULT_WORKLOAD_ROUTES: dict[LLMWorkload, ModelRoute] = {
         2_048,
     ),
     LLMWorkload.AGGREGATOR_CONFLICT: ModelRoute(
-        ModelChoice("gpt-6-sol", Provider.OPENAI, "high"),
+        ModelChoice("gpt-6.1-sol", Provider.OPENAI, "high"),
         ReasoningEffort.HIGH,
         LLMWorkload.AGGREGATOR_CONFLICT,
         4_096,
     ),
     LLMWorkload.MACRO_STRATEGIST: ModelRoute(
-        ModelChoice("gpt-6-sol", Provider.OPENAI, "xhigh"),
+        ModelChoice("gpt-6.1-sol", Provider.OPENAI, "xhigh"),
         ReasoningEffort.XHIGH,
         LLMWorkload.MACRO_STRATEGIST,
         8_192,

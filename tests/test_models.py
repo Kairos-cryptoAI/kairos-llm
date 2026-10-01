@@ -30,14 +30,14 @@ from kairos_llm.models import (
         ),
         (
             LLMWorkload.AGGREGATOR_CONFLICT,
-            "gpt-6-sol",
+            "gpt-6.1-sol",
             Provider.OPENAI,
             ReasoningEffort.HIGH,
             4_096,
         ),
         (
             LLMWorkload.MACRO_STRATEGIST,
-            "gpt-6-sol",
+            "gpt-6.1-sol",
             Provider.OPENAI,
             ReasoningEffort.XHIGH,
             8_192,
@@ -73,8 +73,8 @@ def test_effort_only_routing_remains_backward_compatible():
 
     assert router.choose(ReasoningEffort.LOW).model == "gpt-6-luna"
     assert router.choose(ReasoningEffort.MEDIUM).model == "gpt-6-luna"
-    assert router.choose(ReasoningEffort.HIGH).model == "gpt-6-sol"
-    assert router.choose(ReasoningEffort.XHIGH).model == "gpt-6-sol"
+    assert router.choose(ReasoningEffort.HIGH).model == "gpt-6.1-sol"
+    assert router.choose(ReasoningEffort.XHIGH).model == "gpt-6.1-sol"
     assert str(Provider.DEEPSEEK) == "deepseek"
 
 
