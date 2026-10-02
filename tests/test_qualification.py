@@ -168,6 +168,88 @@ def test_deepseek_qualification_prompts_explicitly_request_json():
     assert "json" in QUALIFICATION_USER_PROMPT.casefold()
 
 
+@pytest.mark.parametrize("value", [True, False, 127, 4097, 2048.0, "2048"])
+def test_output_allowance_rejects_out_of_bounds_or_untyped_values(value):
+    with pytest.raises(ValueError, match="128 through 4096"):
+        planned_cost_ceiling_usd(workloads=None, samples_per_workload=1, max_output_tokens=value)
+
+
+def test_output_allowance_cost_preserves_workload_specific_caps():
+    from kairos_llm.pricing import PriceTable
+
+    allowance = 2048
+    expected = sum(
+        PriceTable().reservation_cost(
+            route.choice.model,
+            TokenUsage(input_tokens=4096, output_tokens=min(allowance, route.max_output_tokens)),
+        )
+        for route in DEFAULT_WORKLOAD_ROUTES.values()
+    )
+    actual = planned_cost_ceiling_usd(workloads=None, samples_per_workload=1, max_output_tokens=allowance)
+    assert actual == pytest.approx(expected)
+    assert actual > planned_cost_ceiling_usd(workloads=None, samples_per_workload=1)
+    assert actual < 0.1
+
+
+@pytest.mark.asyncio
+async def test_output_allowance_above_planned_budget_rejects_before_any_gateway(monkeypatch):
+    import kairos_llm.qualification as qualification
+
+    def forbidden_gateway(_settings):
+        raise AssertionError("no network-capable gateway before cost admission")
+
+    monkeypatch.setattr(qualification, "LLMGateway", forbidden_gateway)
+    with pytest.raises(ValueError, match="exceeds"):
+        await qualify_live_llms(
+            openai_api_key="synthetic-not-dispatched",
+            deepseek_api_key=None,
+            samples_per_workload=1,
+            max_output_tokens=2048,
+            maximum_planned_cost_usd=0.05,
+        )
+
+
+@pytest.mark.asyncio
+async def test_bounded_output_allowance_reaches_settings_reservation_and_report(monkeypatch):
+    import kairos_llm.qualification as qualification
+    from tests.test_budget import _Budget, _Gateway
+
+    budget = _Budget()
+    underlying = _Gateway()
+    captured = {}
+
+    def gateway(settings):
+        underlying.settings = settings
+        return underlying
+
+    async def fake_qualify(**kwargs):
+        captured.update(kwargs)
+        return await kwargs["runner"](LLMWorkload.TEXT_SCOUTS)
+
+    monkeypatch.setattr(qualification, "LLMGateway", gateway)
+    monkeypatch.setattr(qualification, "qualify_llms", fake_qualify)
+    await qualify_live_llms(
+        openai_api_key="synthetic-not-dispatched",
+        deepseek_api_key=None,
+        samples_per_workload=1,
+        workloads=(LLMWorkload.TEXT_SCOUTS,),
+        usage_budget=budget,
+        max_output_tokens=2048,
+        maximum_planned_cost_usd=0.1,
+    )
+    assert underlying.settings.max_output_tokens == 2048
+    assert captured["max_output_tokens"] == 2048
+    assert budget.reservations[0]["reserved_microusd"] == round(captured["planned_cost_ceiling"] * 1_000_000)
+    report = await qualify_llms(
+        samples_per_workload=1,
+        available_keys={},
+        runner=underlying.complete,
+        quota_probe=_quota,
+        max_output_tokens=2048,
+    )
+    assert report.to_dict()["max_output_tokens"] == 2048
+
+
 def test_cli_requires_explicit_campaign_database_target():
     with pytest.raises(SystemExit) as exc:
         _parser().parse_args(["--output", "qualification.json"])

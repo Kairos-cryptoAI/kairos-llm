@@ -98,6 +98,7 @@ class LLMQualificationReport:
     workloads: tuple[WorkloadSummary, ...]
     planned_cost_ceiling_usd: float = 0.0
     maximum_planned_cost_usd: float = 0.0
+    max_output_tokens: int = 128
     live_orders_allowed: bool = False
 
     @property
@@ -117,6 +118,7 @@ class LLMQualificationReport:
             "thresholds": dict(sorted(self.thresholds.items())),
             "planned_cost_ceiling_usd": self.planned_cost_ceiling_usd,
             "maximum_planned_cost_usd": self.maximum_planned_cost_usd,
+            "max_output_tokens": self.max_output_tokens,
             "status": self.status.value,
             "live_orders_allowed": False,
             "quotas": [asdict(item) for item in self.quotas],
@@ -136,6 +138,7 @@ DEFAULT_THRESHOLDS = {
 }
 QUALIFICATION_MAX_INPUT_TOKENS = MINIMUM_INPUT_TOKEN_RESERVATION
 QUALIFICATION_MAX_OUTPUT_TOKENS = 128
+QUALIFICATION_OUTPUT_TOKEN_LIMIT = 4_096
 DEFAULT_MAXIMUM_PLANNED_COST_USD = 0.05
 QUALIFICATION_SYSTEM_PROMPT = (
     "You are a deterministic API qualification probe. Return the requested JSON object exactly. "
@@ -161,6 +164,7 @@ def planned_cost_ceiling_usd(
     *,
     workloads: Sequence[LLMWorkload] | None,
     samples_per_workload: int,
+    max_output_tokens: int = QUALIFICATION_MAX_OUTPUT_TOKENS,
 ) -> float:
     """Return a conservative qualification allowance before any provider call.
 
@@ -169,16 +173,28 @@ def planned_cost_ceiling_usd(
     """
     if samples_per_workload <= 0:
         raise ValueError("samples_per_workload must be positive")
-    usage = TokenUsage(
-        input_tokens=QUALIFICATION_MAX_INPUT_TOKENS,
-        output_tokens=QUALIFICATION_MAX_OUTPUT_TOKENS,
-    )
+    _validate_output_token_limit(max_output_tokens)
     prices = PriceTable()
     per_sample = math.fsum(
-        prices.reservation_cost(DEFAULT_WORKLOAD_ROUTES[workload].choice.model, usage)
+        prices.reservation_cost(
+            DEFAULT_WORKLOAD_ROUTES[workload].choice.model,
+            TokenUsage(
+                input_tokens=QUALIFICATION_MAX_INPUT_TOKENS,
+                output_tokens=min(max_output_tokens, DEFAULT_WORKLOAD_ROUTES[workload].max_output_tokens),
+            ),
+        )
         for workload in _selected_workloads(workloads)
     )
     return per_sample * samples_per_workload
+
+
+def _validate_output_token_limit(value: int) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not QUALIFICATION_MAX_OUTPUT_TOKENS <= value <= QUALIFICATION_OUTPUT_TOKEN_LIMIT
+    ):
+        raise ValueError("qualification max_output_tokens must be an integer from 128 through 4096")
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -270,7 +286,9 @@ async def qualify_llms(
     now: datetime | None = None,
     planned_cost_ceiling: float = 0.0,
     maximum_planned_cost: float = 0.0,
+    max_output_tokens: int = QUALIFICATION_MAX_OUTPUT_TOKENS,
 ) -> LLMQualificationReport:
+    _validate_output_token_limit(max_output_tokens)
     if samples_per_workload <= 0:
         raise ValueError("samples_per_workload must be positive")
     policy = dict(DEFAULT_THRESHOLDS if thresholds is None else thresholds)
@@ -481,6 +499,7 @@ async def qualify_llms(
         workloads=tuple(summaries),
         planned_cost_ceiling_usd=planned_cost_ceiling,
         maximum_planned_cost_usd=maximum_planned_cost,
+        max_output_tokens=max_output_tokens,
     )
 
 
@@ -492,6 +511,7 @@ async def qualify_live_llms(
     workloads: Sequence[LLMWorkload] | None = None,
     maximum_planned_cost_usd: float = DEFAULT_MAXIMUM_PLANNED_COST_USD,
     usage_budget: LLMUsageBudget | None = None,
+    max_output_tokens: int = QUALIFICATION_MAX_OUTPUT_TOKENS,
 ) -> LLMQualificationReport:
     if not math.isfinite(maximum_planned_cost_usd) or maximum_planned_cost_usd <= 0:
         raise ValueError("maximum_planned_cost_usd must be finite and positive")
@@ -499,6 +519,7 @@ async def qualify_live_llms(
     planned_cost = planned_cost_ceiling_usd(
         workloads=selected,
         samples_per_workload=samples_per_workload,
+        max_output_tokens=max_output_tokens,
     )
     if planned_cost > maximum_planned_cost_usd:
         raise ValueError(
@@ -513,7 +534,7 @@ async def qualify_live_llms(
         openai_base_url="https://api.openai.com/v1",
         deepseek_base_url="https://api.deepseek.com",
         max_retries=0,
-        max_output_tokens=QUALIFICATION_MAX_OUTPUT_TOKENS,
+        max_output_tokens=max_output_tokens,
         request_timeout_s=30,
     )
     gateway = BudgetedLLMGateway(LLMGateway(settings), usage_budget)
@@ -598,6 +619,7 @@ async def qualify_live_llms(
             workloads=selected,
             planned_cost_ceiling=planned_cost,
             maximum_planned_cost=maximum_planned_cost_usd,
+            max_output_tokens=max_output_tokens,
         )
     finally:
         await gateway.close()
@@ -639,6 +661,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--openai-key-file", type=Path)
     parser.add_argument("--deepseek-key-file", type=Path)
     parser.add_argument("--samples", type=int, default=2)
+    parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=QUALIFICATION_MAX_OUTPUT_TOKENS,
+        help="explicit bounded reasoning+visible output allowance (128..4096); role caps still apply",
+    )
     parser.add_argument(
         "--workload",
         action="append",
@@ -688,6 +716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workloads=selected,
                 maximum_planned_cost_usd=args.maximum_planned_cost_usd,
                 usage_budget=CampaignLLMUsageBudget(repository),
+                max_output_tokens=args.max_output_tokens,
             )
         finally:
             await database.close()

@@ -186,6 +186,15 @@ Paid diagnostics can select one route so an already-qualified model is not calle
 again. The command also refuses to start when its conservative planned allowance
 exceeds the supplied ceiling; the default ceiling is `$0.05`:
 
+Qualification keeps the legacy `128` output-token default. An explicit
+`--max-output-tokens` allowance from `128` through `4096` can be selected before
+a new run; each workload's lower role cap still applies. The cost admission,
+durable reservation, provider request and report all use that allowance.
+[Reasoning tokens share the output budget](https://developers.openai.com/api/docs/guides/reasoning#allocating-space-for-reasoning),
+so a short cap can produce an incomplete response before visible JSON while
+still incurring costs. Increasing the allowance is not an automatic retry or a
+qualification PASS; failed/ambiguous reservations remain for reconciliation.
+
 ```powershell
 uv run --locked kairos-llm-qualify `
   --expected-database-name kairos `
