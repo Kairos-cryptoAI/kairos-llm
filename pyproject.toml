@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 qualification = ["kairos-persistence>=0.1,<0.2"]
+campaign = ["kairos-persistence>=0.1,<0.2", "kairos-router>=0.2,<0.3", "kairos-strategy-engine>=0.2,<0.3"]
 
 [project.scripts]
 kairos-llm-qualify = "kairos_llm.qualification:main"
@@ -29,6 +30,8 @@ dev = [
     "bandit>=1.8,<2",
     "build>=1.2,<2",
     "kairos-persistence>=0.1,<0.2",
+    "kairos-router>=0.2,<0.3",
+    "kairos-strategy-engine>=0.2,<0.3",
     "mypy>=1.10,<3",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -40,7 +43,9 @@ required-version = "==0.12.3"
 
 [tool.uv.sources]
 kairos-core = { git = "https://github.com/Kairos-cryptoAI/kairos-core.git", rev = "56df50787eff83c898aa2aeefb426c6ee8482820" }
-kairos-persistence = { git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git", rev = "f82b405646498c246c04e2633c53355f3d9adc03" }
+kairos-persistence = { git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git", rev = "695fcc22515bc73d7ac92e6c593ec8f08ceb9605" }
+kairos-router = { git = "https://github.com/Kairos-cryptoAI/kairos-router.git", rev = "6025cd1ce7e818181e51be000198db477b0395d4" }
+kairos-strategy-engine = { git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git", rev = "4b06f78750aacc838a16c96cc6038faf5ba3599b" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["kairos_llm"]

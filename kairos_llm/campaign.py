@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, Protocol, cast
 
-from kairos_core import EvidenceReferenceV1, StrategyIntentV1, canonical_sha256
+from kairos_core import EvidenceReferenceV1, canonical_sha256
 from kairos_persistence.research_campaign import (
     ResearchArmOutcomeV1,
     ResearchCampaignRepository,
@@ -62,9 +62,7 @@ class CampaignBaselineEvaluator(Protocol):
     strategy_id: str
     strategy_revision: str
 
-    async def evaluate(
-        self, *, window, sources: tuple[ResearchSourceReceiptV1, ...]
-    ) -> StrategyIntentV1 | None: ...
+    async def evaluate(self, *, window, sources: tuple[ResearchSourceReceiptV1, ...]) -> Any: ...
 
 
 class _IndependentBudgetObserver:
@@ -106,6 +104,8 @@ class AdaptiveCampaignScheduler:
     Its gateway is explicitly injected and must already obey shared budgets,
     frozen routes and max_retries=0. CLI use below is offline-fixture only.
     """
+
+    scheduler_sha256 = CAMPAIGN_SCHEDULER_SHA256
 
     def __init__(
         self,
@@ -154,21 +154,19 @@ class AdaptiveCampaignScheduler:
                 async with asyncio.timeout(plan.maximum_call_seconds):
                     # Frozen models contain mutable nested JSON. A transform in
                     # the evaluator must never alter another arm's source bytes.
-                    intent = await self.evaluator.evaluate(
+                    result = await self._evaluate_window(
                         window=window, sources=tuple(source.model_copy(deep=True) for source in sources)
                     )
-                evaluation = await self.repository.record_evaluation(
-                    claim=claim, bundle=bundle, intent=intent
-                )
+                evaluation = await self._record_evaluation(claim, bundle, result)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 outcomes.extend(await self._finalize(claim, fallback="EVALUATOR_FAILED"))
                 continue
-            if evaluation.evaluated_at_ts_ms > window.paired_at_ts_ms:
+            if await self._evaluation_is_late(evaluation, window):
                 outcomes.extend(await self._finalize(claim, fallback="LATE"))
                 continue
-            if intent is not None:
+            if evaluation.intent is not None:
                 await self._review(claim, bundle, evaluation, sources, plan, schedule, protocol)
             if await self.repository.clock() >= window.paired_at_ts_ms:
                 outcomes.extend(await self._finalize(claim, fallback="MISSED"))
@@ -199,7 +197,9 @@ class AdaptiveCampaignScheduler:
                     )
                     <= window.paired_at_ts_ms
                 ):
-                    await coordinator.replay_sample(
+                    await self._replay_proposal_sample(
+                        coordinator,
+                        observation,
                         schedule=schedule,
                         protocol=protocol,
                         sample_id=claim.sample_id,
@@ -221,7 +221,7 @@ class AdaptiveCampaignScheduler:
     async def reconcile(self, campaign_id: str) -> tuple[ResearchArmOutcomeV1, ...]:
         """Account expired claims without ever evaluating or calling a gateway."""
         plan, schedule, _ = await self.repository.load_campaign(campaign_id)
-        if plan.scheduler_sha256 != CAMPAIGN_SCHEDULER_SHA256:
+        if plan.scheduler_sha256 != self.scheduler_sha256:
             raise ResearchEvidenceError("scheduler artifact differs from preregistered version")
         now = await self.repository.clock()
         outcomes: list[ResearchArmOutcomeV1] = []
@@ -233,7 +233,7 @@ class AdaptiveCampaignScheduler:
 
     async def _validate(self, campaign_id):
         plan, schedule, protocol = await self.repository.load_campaign(campaign_id)
-        if plan.scheduler_sha256 != CAMPAIGN_SCHEDULER_SHA256:
+        if plan.scheduler_sha256 != self.scheduler_sha256:
             raise ResearchEvidenceError("scheduler artifact differs from preregistered version")
         if (self.evaluator.artifact_sha256, self.evaluator.strategy_id, self.evaluator.strategy_revision) != (
             schedule.evaluator_sha256,
@@ -258,7 +258,7 @@ class AdaptiveCampaignScheduler:
             ) != (
                 prompt.prompt_sha256,
                 canonical_sha256(schema.model_json_schema()),
-                RESEARCH_INPUT_FEATURE_SHA256,
+                self._input_feature_sha256(arm.arm_id),
                 route.choice.provider.value,
                 route.choice.model,
                 route.effort.value,
@@ -267,6 +267,24 @@ class AdaptiveCampaignScheduler:
             ):
                 raise ResearchEvidenceError("research arm route/prompt/schema differs from preregistration")
         return plan, schedule, protocol
+
+    def _input_feature_sha256(self, arm_id: str) -> str:
+        return RESEARCH_INPUT_FEATURE_SHA256
+
+    async def _evaluate_window(self, *, window, sources):
+        return await self.evaluator.evaluate(window=window, sources=sources)
+
+    async def _evaluation_is_late(self, evaluation, window):
+        return evaluation.evaluated_at_ts_ms > window.paired_at_ts_ms
+
+    async def _record_evaluation(self, claim, bundle, intent):
+        return await self.repository.record_evaluation(claim=claim, bundle=bundle, intent=intent)
+
+    async def _replay_proposal_sample(self, coordinator, observation, **kwargs):
+        return await coordinator.replay_sample(**kwargs)
+
+    def _review_input_metadata(self, evaluation, sources, window) -> dict[str, Any]:
+        return {}
 
     def _gateway(self, claim, arm_id) -> BudgetedLLMGateway:
         return BudgetedLLMGateway(
@@ -315,6 +333,7 @@ class AdaptiveCampaignScheduler:
                 }
                 for x, ref in zip(sources, references, strict=True)
             ],
+            **self._review_input_metadata(evaluation, sources, window),
         }
         user = (
             self.review_prompt.user_prefix
@@ -435,7 +454,7 @@ class AdaptiveCampaignScheduler:
             )
             decision = None
             causal = state.get(("sample", arm_id, "one"))
-            if evaluation is not None and evaluation.evaluated_at_ts_ms > window.paired_at_ts_ms:
+            if evaluation is not None and await self._evaluation_is_late(evaluation, window):
                 status = "LATE"
             elif arm_id == "strategy-only" and evaluation is not None:
                 status = "BASELINE" if evaluation.intent is not None else "NO_INTENT"

@@ -42,7 +42,7 @@ jobs:
       - name: Check formatting
         run: uv run --locked ruff format --check kairos_llm tests scripts
       - name: Type check
-        run: uv run --locked mypy kairos_llm
+        run: uv run --locked mypy --python-version "${{ matrix.python-version }}" kairos_llm
       - name: Security scan
         run: uv run --locked bandit -q -r kairos_llm -x tests
       - name: Test
@@ -88,3 +88,41 @@ jobs:
           --junitxml=campaign-native.xml
       - name: Require exactly one native pass (not skip)
         run: uv run --python 3.11 --locked --no-editable --dev python scripts/campaign_native_ci.py check-result
+  causal-campaign-native:
+    name: Isolated causal producer and actual-strategy PostgreSQL acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.29.1-pg16@sha256:252a443e2936039b83dd8da1373d01e59e932d1054fa6adf1bc061f1d56ae60a
+        env:
+          POSTGRES_USER: kairos
+          POSTGRES_PASSWORD: kairos_test
+          POSTGRES_DB: kairos_sim_test_campaign_08aa3deee0764c65a0ccbbaa08984f72
+        ports:
+          - 5432:5432
+        options: >-
+          --memory 1g --memory-swap 1g --cpus 1 --pids-limit 128
+          --health-cmd "pg_isready -U kairos -d kairos_sim_test_campaign_08aa3deee0764c65a0ccbbaa08984f72"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      # Fresh separate public fixture target; never reuse the legacy/native or runtime database.
+      KAIROS_RESEARCH_CAMPAIGN_TEST_DATABASE_URL: postgresql://kairos:kairos_test@localhost:5432/kairos_sim_test_campaign_08aa3deee0764c65a0ccbbaa08984f72
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --python 3.11 --locked --no-editable --dev
+      - name: Verify a fresh independent target and prepare only the campaign schema
+        run: uv run --python 3.11 --locked --no-editable --dev python scripts/campaign_native_ci.py prepare
+      - name: Exercise distinct causal producer, actual strategy, Router context and PostgreSQL pair
+        run: >-
+          uv run --python 3.11 --locked --no-editable --dev pytest -q --tb=short
+          tests/test_causal_campaign_native.py::test_native_causal_producer_strategy_router_pair_and_restart_on_explicit_disposable_campaign_db
+          --junitxml=causal-campaign-native.xml
+      - name: Require exactly one new-family native pass independently of the legacy target
+        run: uv run --python 3.11 --locked --no-editable --dev python scripts/campaign_native_ci.py check-causal-result

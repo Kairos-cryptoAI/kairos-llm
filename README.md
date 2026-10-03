@@ -246,6 +246,43 @@ installed: absent packages are explicit skips, not proof. Offline doubles prove
 the scheduler algorithms but not PG DDL/permissions, real feed acquisition,
 provider quality/cost or future alpha. These remain independent acceptance work.
 
+## Explicit producer / registered-strategy causal hookup
+
+The `campaign` extra supplies pinned Persistence, Router and Strategy packages.
+`kairos_llm.causal_campaign.CausalAdaptiveCampaignScheduler` is a separate,
+explicitly constructed adapter, not a default worker or CLI startup. A caller
+must independently preregister its exact scheduler/projector/evaluator/prompt
+and arm identities and inject the actual `CausalStrategyEvaluator`, a verified
+read-only complete history resolver, `CausalReviewContextProjector` with explicit
+bounded policy, and the existing shared `CampaignLLMUsageBudget`. The existing
+ledger's historical adoption and cumulative caps are not reset or replaced.
+
+`CampaignInputCaptureBridge` stores original complete Text/Macro producer wire
+messages and a compact market descriptor resolving an exact gap-free bar window.
+All producer IDs, schema and timezone-aware millisecond clocks must be explicit;
+sub-millisecond clocks are rejected, never silently truncated. Availability is
+independently recorded by PostgreSQL, conservatively rounded up for this family.
+Raw article bytes, upstream Macro inputs and model completion provenance remain
+explicitly `UNAVAILABLE` when the producer message does not supply them.
+
+The actual strategy generator keeps its original intent clock and provenance.
+The later context cutoff, market-context hash and DB recording clock are separate
+facts in `ResearchCausalStrategyEvaluationReceiptV1`. Router's pure topic-aware
+aggregation and conflict classification become hashed advisory review context;
+they do not create/backdate a `CandidateRoute` or dynamically select a model.
+Proposal replay uses independently resolved `ResearchCausalPairReceiptV1`, not
+the incompatible Core V1 decision-sample clock family or a scientific seal.
+Legacy frozen plans, identities and replay APIs cannot be adopted into this path.
+
+Engineering tests include genuine positive/quiet registered-strategy outputs,
+original intent byte parity, captured Text/Macro context, asset/broadcast
+isolation, unchanged shared-budget adapter, missing/corrupt input and no-resend.
+The additional CI target requires its own exact native PASS; legacy native PASS
+does not substitute for it. Provider and underlying budget I/O in that native
+test are explicitly synthetic, not paid-model qualification or budget adoption.
+No new adaptive economic candidate is selected or frozen by this generic hookup,
+and no 365-day campaign, consumer, provider call or trading permission is started.
+
 ## Local development checks
 
 ```powershell

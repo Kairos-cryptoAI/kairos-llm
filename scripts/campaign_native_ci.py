@@ -25,6 +25,10 @@ NATIVE_TARGET = "test_native_three_arm_scheduler_and_restart_on_explicit_disposa
 PREPARE_TIMEOUT_S = 60.0
 CLOSE_TIMEOUT_S = 5.0
 REPORT = Path("campaign-native.xml")
+CAUSAL_REPORT = Path("causal-campaign-native.xml")
+CAUSAL_NATIVE_TARGET = (
+    "test_native_causal_producer_strategy_router_pair_and_restart_on_explicit_disposable_campaign_db"
+)
 FAILURE_CATEGORIES = frozenset(
     {
         "EXPLICIT_TARGET_REQUIRED",
@@ -105,17 +109,18 @@ async def prepare(database_url: str | None) -> None:
         await asyncio.wait_for(database.close(), timeout=CLOSE_TIMEOUT_S)
 
 
-def check_result() -> None:
-    if REPORT.is_symlink() or not REPORT.is_file() or REPORT.stat().st_size > 1024 * 1024:
+def check_result(*, causal: bool = False) -> None:
+    report, target = (CAUSAL_REPORT, CAUSAL_NATIVE_TARGET) if causal else (REPORT, NATIVE_TARGET)
+    if report.is_symlink() or not report.is_file() or report.stat().st_size > 1024 * 1024:
         raise CampaignCIError("NATIVE_RESULT_REQUIRED")
     try:
-        root = ET.fromstring(REPORT.read_bytes())
+        root = ET.fromstring(report.read_bytes())
     except (ET.ParseError, OSError):
         raise CampaignCIError("INVALID_NATIVE_RESULT") from None
     cases = list(root.iter("testcase"))
     if (
         len(cases) != 1
-        or cases[0].get("name") != NATIVE_TARGET
+        or cases[0].get("name") != target
         or any(cases[0].find(tag) is not None for tag in ("skipped", "failure", "error"))
         or any(True for _ in root.iter("failure"))
         or any(True for _ in root.iter("error"))
@@ -125,14 +130,14 @@ def check_result() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if args not in (["prepare"], ["check-result"]):
+    if args not in (["prepare"], ["check-result"], ["check-causal-result"]):
         print("CAMPAIGN_NATIVE_CI_FAILED INVALID_COMMAND")
         return 1
     try:
         if args == ["prepare"]:
             asyncio.run(prepare(os.environ.get(ENV_NAME)))
         else:
-            check_result()
+            check_result(causal=args == ["check-causal-result"])
     except CampaignCIError as exc:
         category = str(exc) if str(exc) in FAILURE_CATEGORIES else "OPERATION_FAILED"
         print(f"CAMPAIGN_NATIVE_CI_FAILED {category}")

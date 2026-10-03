@@ -25,6 +25,7 @@ from kairos_core import (
     canonical_sha256,
 )
 from kairos_core.research_pairing import ScheduledResearchSampleV1, build_research_decision_sample
+from kairos_persistence.causal_campaign import CampaignEvaluationReceipt
 from kairos_persistence.research_campaign import ResearchCampaignRepository
 from kairos_persistence.research_evidence import (
     ResearchLLMAttemptStartV1,
@@ -90,7 +91,7 @@ class ResearchEvidenceJournal(Protocol):
 
     async def load_source(self, receipt_sha256: str) -> ResearchSourceReceiptV1: ...
 
-    async def load_evaluation(self, receipt_sha256: str) -> ResearchStrategyEvaluationReceiptV1: ...
+    async def load_evaluation(self, receipt_sha256: str) -> CampaignEvaluationReceipt: ...
 
     async def record_verified_sample(self, sample: ResearchDecisionSampleV1) -> bool: ...
 
@@ -318,6 +319,8 @@ class ResearchProposalCoordinator:
             schedule, protocol, sample_id, prompt, source_receipt_sha256s, workload
         )
         evaluation = await self.journal.load_evaluation(evaluation_receipt_sha256)
+        if type(evaluation) is not ResearchStrategyEvaluationReceiptV1:
+            raise ResearchEvidenceError("Core V1 replay cannot adopt a different evaluation clock family")
         window = next(item for item in schedule.windows if item.sample_id == sample_id)
         if (
             evaluation.receipt_sha256 != evaluation_receipt_sha256
