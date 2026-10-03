@@ -359,6 +359,16 @@ class ResearchProposalCoordinator:
             llm_failure=terminal.failure if terminal is not None else None,
             llm_was_called=observation is not None,
         )
+        # The core pairing helper is arm-agnostic. Bind the independently
+        # verified frozen protocol before the strict journal admits a sample,
+        # rederiving its identity rather than mutating an already-hashed value.
+        sample = ResearchDecisionSampleV1.model_validate(
+            {
+                **sample.to_payload(),
+                "sample_record_id": None,
+                "arm_protocol_digest": protocol.arm_digest(context.arm_id),
+            }
+        )
         await self.journal.record_verified_sample(sample)
         return sample
 

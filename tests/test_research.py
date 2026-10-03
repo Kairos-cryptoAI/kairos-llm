@@ -54,10 +54,11 @@ class _Budget:
 
 
 class _Journal:
-    def __init__(self, events, sources, evaluation):
+    def __init__(self, events, sources, evaluation, protocol):
         self.events = events
         self.sources = {item.receipt_sha256: item for item in sources}
         self.evaluation = evaluation
+        self.protocol = protocol
         self.attempts, self.samples = {}, []
         self.start_error, self.finish_error = None, None
         self.hide_existing_once = False
@@ -105,6 +106,10 @@ class _Journal:
         return True
 
     async def record_verified_sample(self, sample):
+        if sample.arm_protocol_digest != self.protocol.arm_digest(sample.arm_id):
+            raise ResearchEvidenceError("sample differs from the strict journal's frozen arm")
+        if sample.sample_record_id != canonical_sha256(sample.identity_payload()):
+            raise ResearchEvidenceError("sample identity was not rederived after arm binding")
         self.events.append("record-verified")
         self.samples.append(sample)
         return True
@@ -229,7 +234,7 @@ def setup():
         evaluator_sha256=schedule.evaluator_sha256,
         source_receipt_sha256s=(source.receipt_sha256,),
     )
-    journal = _Journal(events, (source,), evaluation)
+    journal = _Journal(events, (source,), evaluation, protocol)
     budget, underlying = _Budget(events), _Gateway(events)
     times = iter((MARKET + 100, MARKET + 200))
     coordinator = ResearchProposalCoordinator(
@@ -273,6 +278,33 @@ async def test_one_durable_call_and_terminal_replay_without_another_reservation(
     assert sample.llm_proposal_id == result.terminal.proposal.proposal_id
     assert setup.journal.samples == [sample]
     assert len(setup.underlying.calls) == 1
+
+
+@pytest.mark.parametrize("invalid_digest", [None, "0" * 64])
+async def test_verified_replay_binds_frozen_arm_and_rederives_identity_before_strict_journal(
+    setup, invalid_digest
+):
+    observation = await setup.coordinator.observe(**setup.request)
+    sample = await setup.coordinator.replay_sample(
+        **setup.request, evaluation_receipt_sha256=setup.journal.evaluation.receipt_sha256
+    )
+    assert sample.arm_protocol_digest == setup.request["protocol"].arm_digest("llm-proposal-research")
+    assert sample.sample_record_id == canonical_sha256(sample.identity_payload())
+    assert sample.llm_proposal_id == observation.terminal.proposal.proposal_id
+    assert await setup.coordinator.observe(**setup.request) == observation
+    assert (
+        await setup.coordinator.replay_sample(
+            **setup.request, evaluation_receipt_sha256=setup.journal.evaluation.receipt_sha256
+        )
+        == sample
+    )
+    assert len(setup.budget.reservations) == len(setup.budget.commits) == len(setup.underlying.calls) == 1
+    invalid = type(sample).model_validate(
+        {**sample.to_payload(), "sample_record_id": None, "arm_protocol_digest": invalid_digest}
+    )
+    with pytest.raises(ResearchEvidenceError, match="frozen arm"):
+        await setup.journal.record_verified_sample(invalid)
+    assert setup.journal.samples == [sample, sample]
 
 
 @pytest.mark.parametrize(
