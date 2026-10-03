@@ -65,6 +65,16 @@ from kairos_llm.research import (
 from kairos_llm.schemas import LLMResult, TokenUsage
 
 T0 = 1_790_064_000_000
+_V1_SCHEDULER_SHA256 = canonical_sha256(
+    {
+        "contract_version": "adaptive-campaign-scheduler.v1",
+        "claims": "durable-once-no-reclaim",
+        "capture": "db-observed-before-decision-cutoff.v1",
+        "arms": "fixed-three-matched",
+        "denominator": "all-scheduled-including-missing-late-unknown",
+        "authority": "SIM_RESEARCH_ONLY",
+    }
+)
 
 
 class _Connection:
@@ -281,13 +291,17 @@ class _Evaluator:
 
 
 @pytest.fixture
-async def setup():
+async def setup(request):
+    scheduler_digest = getattr(request, "param", CAMPAIGN_SCHEDULER_SHA256)
+    evaluator_digest = "b" * 64
+    if isinstance(scheduler_digest, tuple):
+        scheduler_digest, evaluator_digest = scheduler_digest
     schedule = ResearchObservationScheduleV1(
         campaign_id="causal-engineering-fixture",
         strategy_id="baseline",
         strategy_revision="v1",
         source_set_sha256="a" * 64,
-        evaluator_sha256="b" * 64,
+        evaluator_sha256=evaluator_digest,
         windows=(
             ResearchObservationWindowV1(
                 sample_id="sample-1",
@@ -342,7 +356,7 @@ async def setup():
         schedule_digest=schedule.schedule_digest,
         candidate_protocol_digest=protocol.protocol_digest,
         recording_mode="OFFLINE_ENGINEERING_FIXTURE",
-        scheduler_sha256=CAMPAIGN_SCHEDULER_SHA256,
+        scheduler_sha256=scheduler_digest,
         required_sources=tuple(
             ResearchCaptureRequirementV1(source_kind=kind, source_name=name, maximum_age_ms=2_000)
             for kind, name in (("MACRO", "macro"), ("MARKET_SNAPSHOT", "bars"), ("NEWS", "news"))
@@ -624,6 +638,94 @@ async def test_claim_crash_is_never_reclaimed_or_reevaluated(setup):
     outcomes = await setup.scheduler.reconcile(setup.plan.campaign_id)
     assert {x.status for x in outcomes} == {"MISSED"}
     assert setup.evaluator.calls == len(setup.underlying.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "setup",
+    ["0" * 64, _V1_SCHEDULER_SHA256],
+    indirect=True,
+)
+async def test_direct_reconcile_refuses_other_preregistered_scheduler_before_clock_or_writes(
+    setup, monkeypatch
+):
+    # The differing plan was genuinely preregistered before future windows,
+    # not replaced or rehashed after registration to simulate a frozen plan.
+    assert await setup.repository.claim_next(setup.plan.campaign_id)
+    setup.connection.now = T0 + 5_100
+    writes = tuple(setup.connection.sql)
+    original_plan, _, _ = await setup.repository.load_campaign(setup.plan.campaign_id)
+
+    async def must_not_read(*_args, **_kwargs):
+        raise AssertionError("unaccepted scheduler must stop before clock/pending/replay")
+
+    monkeypatch.setattr(setup.repository, "clock", must_not_read)
+    monkeypatch.setattr(setup.repository, "pending_claims", must_not_read)
+    from kairos_llm.research import ResearchEvidenceError
+
+    with pytest.raises(ResearchEvidenceError, match="scheduler artifact differs"):
+        await setup.scheduler.reconcile(setup.plan.campaign_id)
+    assert not await setup.repository.outcomes(setup.plan.campaign_id, "sample-1")
+    assert (await setup.repository.load_campaign(setup.plan.campaign_id))[0] == original_plan
+    assert all(sql.startswith("SELECT pg_advisory") for sql in setup.connection.sql[len(writes) :])
+    assert setup.evaluator.calls == len(setup.underlying.calls) == 0
+    assert not setup.budget.reserves and not setup.budget.commits
+
+
+@pytest.mark.parametrize("setup", [(_V1_SCHEDULER_SHA256, OFFLINE_NO_INTENT_EVALUATOR_SHA256)], indirect=True)
+async def test_cli_reconcile_path_cannot_adopt_old_frozen_scheduler(setup, monkeypatch):
+    from kairos_llm import campaign_cli
+    from kairos_llm.research import ResearchEvidenceError
+
+    assert await setup.repository.claim_next(setup.plan.campaign_id)
+    setup.connection.now = T0 + 5_100
+    database = setup.repository._database
+    lifecycle = []
+
+    async def connect():
+        lifecycle.append("connect")
+
+    async def verify_schema():
+        lifecycle.append("verify")
+
+    async def close():
+        lifecycle.append("close")
+
+    async def forbidden(*_args, **_kwargs):
+        raise AssertionError("unaccepted scheduler cannot read clock, dispatch or reserve")
+
+    monkeypatch.setattr(database, "connect", connect)
+    monkeypatch.setattr(database, "verify_schema", verify_schema)
+    monkeypatch.setattr(database, "close", close)
+    monkeypatch.setattr(setup.repository, "clock", forbidden)
+    monkeypatch.setattr(setup.repository, "pending_claims", forbidden)
+    monkeypatch.setattr(campaign_cli, "Database", lambda *_args, **_kwargs: database)
+    monkeypatch.setattr(campaign_cli, "ResearchCampaignRepository", lambda _database: setup.repository)
+    monkeypatch.setattr(campaign_cli._OfflineGateway, "complete", forbidden)
+    monkeypatch.setattr(campaign_cli._OfflineBudget, "reserve", forbidden)
+    monkeypatch.setattr(
+        campaign_cli,
+        "_artifact",
+        lambda _path: {
+            "review_prompt": setup.scheduler.review_prompt.model_dump(mode="json"),
+            "proposal_prompt": setup.scheduler.proposal_prompt.model_dump(mode="json"),
+        },
+    )
+    monkeypatch.setenv(
+        "KAIROS_RESEARCH_CAMPAIGN_DATABASE_URL", "postgresql://fixture@127.0.0.1/kairos_sim_cli_fixture"
+    )
+    before = len(setup.connection.sql)
+    with pytest.raises(ResearchEvidenceError, match="scheduler artifact differs"):
+        await campaign_cli._run(
+            SimpleNamespace(
+                command="reconcile-offline",
+                campaign_id=setup.plan.campaign_id,
+                prompt_artifact="fixture-only",
+            )
+        )
+    assert lifecycle == ["connect", "verify", "close"]
+    assert not await setup.repository.outcomes(setup.plan.campaign_id, "sample-1")
+    assert all(sql.startswith("SELECT pg_advisory") for sql in setup.connection.sql[before:])
+    assert not setup.underlying.calls and not setup.budget.reserves and setup.evaluator.calls == 0
 
 
 async def test_two_schedulers_share_one_durable_claim(setup):

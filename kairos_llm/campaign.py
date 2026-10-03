@@ -217,6 +217,8 @@ class AdaptiveCampaignScheduler:
     async def reconcile(self, campaign_id: str) -> tuple[ResearchArmOutcomeV1, ...]:
         """Account expired claims without ever evaluating or calling a gateway."""
         plan, schedule, _ = await self.repository.load_campaign(campaign_id)
+        if plan.scheduler_sha256 != CAMPAIGN_SCHEDULER_SHA256:
+            raise ResearchEvidenceError("scheduler artifact differs from preregistered version")
         now = await self.repository.clock()
         outcomes: list[ResearchArmOutcomeV1] = []
         for claim in await self.repository.pending_claims(campaign_id, limit=plan.maximum_windows_per_tick):
