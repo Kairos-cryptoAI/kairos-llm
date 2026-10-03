@@ -30,7 +30,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up uv and Python
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
@@ -72,7 +72,7 @@ jobs:
       KAIROS_RESEARCH_CAMPAIGN_TEST_DATABASE_URL: postgresql://kairos:kairos_test@localhost:5432/kairos_sim_test_campaign_6c587160f5a84f32abcc1c0adf603ef8
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.3"
           python-version: "3.11"
@@ -110,7 +110,7 @@ jobs:
       KAIROS_RESEARCH_CAMPAIGN_TEST_DATABASE_URL: postgresql://kairos:kairos_test@localhost:5432/kairos_sim_test_campaign_08aa3deee0764c65a0ccbbaa08984f72
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.3"
           python-version: "3.11"
