@@ -152,7 +152,11 @@ class AdaptiveCampaignScheduler:
                 continue
             try:
                 async with asyncio.timeout(plan.maximum_call_seconds):
-                    intent = await self.evaluator.evaluate(window=window, sources=sources)
+                    # Frozen models contain mutable nested JSON. A transform in
+                    # the evaluator must never alter another arm's source bytes.
+                    intent = await self.evaluator.evaluate(
+                        window=window, sources=tuple(source.model_copy(deep=True) for source in sources)
+                    )
                 evaluation = await self.repository.record_evaluation(
                     claim=claim, bundle=bundle, intent=intent
                 )

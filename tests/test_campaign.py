@@ -375,7 +375,12 @@ async def setup(request):
             source_name=requirement.source_name,
             reference=requirement.source_name,
             source_as_of_ts_ms=T0,
-            content={"symbol": "BTCUSDT", "close": 100, "kind": requirement.source_kind},
+            content={
+                "symbol": "BTCUSDT",
+                "close": 100,
+                "kind": requirement.source_kind,
+                "nested": {"values": [100]},
+            },
         )
     connection.now = T0 + 1_100
     underlying, budget, evaluator = _Gateway(connection), _Budget(), _Evaluator()
@@ -426,6 +431,48 @@ async def test_no_intent_keeps_proposal_and_no_call_review_in_denominator(setup)
     outcomes = await setup.scheduler.run_once(setup.plan.campaign_id)
     assert [x.status for x in outcomes] == ["NO_INTENT", "NO_INTENT", "PROPOSAL"]
     assert len(setup.underlying.calls) == 1 and outcomes[1].attempt_id is None
+
+
+async def test_evaluator_nested_source_mutation_cannot_change_review_or_proposal_inputs(setup, monkeypatch):
+    before = {}
+    for row in setup.connection.rows["sim_adaptive_campaign_receipts"]:
+        if row["kind"] == "source":
+            source = await setup.repository.load_source(row["receipt_sha256"])
+            before[source.receipt_sha256] = source.model_dump(mode="json")
+    evaluate = setup.evaluator.evaluate
+    transformed = []
+
+    async def normalizing_evaluator(*, window, sources):
+        for source in sources:
+            source.content["close"] = 999
+            source.content["nested"]["values"].append(999)
+        transformed.extend(sources)
+        return await evaluate(window=window, sources=sources)
+
+    monkeypatch.setattr(setup.evaluator, "evaluate", normalizing_evaluator)
+    outcomes = await setup.scheduler.run_once(setup.plan.campaign_id)
+    assert [x.status for x in outcomes] == ["BASELINE", "ALLOW", "PROPOSAL"]
+    assert len({x.bundle_receipt_sha256 for x in outcomes}) == 1
+    assert len({x.evaluation_receipt_sha256 for x in outcomes}) == 1
+    assert all(x.content["close"] == 999 and x.content["nested"]["values"] == [100, 999] for x in transformed)
+    assert len(setup.underlying.calls) == 2
+    for call in setup.underlying.calls:
+        payload = json.loads(call["user"].split("\n", 1)[1])
+        assert {x["receipt_sha256"] for x in payload["sources"]} == set(before)
+        for item in payload["sources"]:
+            saved = before[item["receipt_sha256"]]
+            assert item["content"] == saved["content"]
+            assert canonical_sha256(item["content"]) == saved["content_sha256"]
+            assert item["evidence"]["content_sha256"] == saved["content_sha256"]
+    for digest, payload in before.items():
+        assert (await setup.repository.load_source(digest)).model_dump(mode="json") == payload
+    denominator = await setup.repository.seal_denominator(setup.plan.campaign_id)
+    assert denominator.expected_outcomes == 3 and denominator.status_counts == {
+        "BASELINE": 1,
+        "ALLOW": 1,
+        "PROPOSAL": 1,
+    }
+    assert not denominator.economic_qualification and not denominator.live_orders_allowed
 
 
 async def test_review_wrong_backend_is_unknown_costed_and_never_resent(setup):
