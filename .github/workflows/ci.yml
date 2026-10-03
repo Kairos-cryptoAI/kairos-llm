@@ -38,9 +38,9 @@ jobs:
       - name: Sync locked environment
         run: uv sync --locked
       - name: Lint
-        run: uv run --locked ruff check kairos_llm tests
+        run: uv run --locked ruff check kairos_llm tests scripts
       - name: Check formatting
-        run: uv run --locked ruff format --check kairos_llm tests
+        run: uv run --locked ruff format --check kairos_llm tests scripts
       - name: Type check
         run: uv run --locked mypy kairos_llm
       - name: Security scan
@@ -49,3 +49,42 @@ jobs:
         run: uv run --locked pytest -q --tb=short
       - name: Build wheel and source distribution
         run: uv build --no-sources
+
+  campaign-native:
+    name: Isolated three-arm campaign PostgreSQL acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.29.1-pg16@sha256:252a443e2936039b83dd8da1373d01e59e932d1054fa6adf1bc061f1d56ae60a
+        env:
+          POSTGRES_USER: kairos
+          POSTGRES_PASSWORD: kairos_test
+          POSTGRES_DB: kairos_sim_test_campaign_6c587160f5a84f32abcc1c0adf603ef8
+        ports:
+          - 5432:5432
+        options: >-
+          --memory 1g --memory-swap 1g --cpus 1 --pids-limit 128
+          --health-cmd "pg_isready -U kairos -d kairos_sim_test_campaign_6c587160f5a84f32abcc1c0adf603ef8"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      # Public fixture credentials; never a runtime/provider secret or production target.
+      KAIROS_RESEARCH_CAMPAIGN_TEST_DATABASE_URL: postgresql://kairos:kairos_test@localhost:5432/kairos_sim_test_campaign_6c587160f5a84f32abcc1c0adf603ef8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.3"
+          python-version: "3.11"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --python 3.11 --locked --no-editable --dev
+      - name: Verify fresh test target and install campaign-only migration profile
+        run: uv run --python 3.11 --locked --no-editable --dev python scripts/campaign_native_ci.py prepare
+      - name: Exercise native three-arm journal, reconnect and interrupted-start recovery
+        run: >-
+          uv run --python 3.11 --locked --no-editable --dev pytest -q --tb=short
+          tests/test_campaign.py::test_native_three_arm_scheduler_and_restart_on_explicit_disposable_campaign_db
+          --junitxml=campaign-native.xml
+      - name: Require exactly one native pass (not skip)
+        run: uv run --python 3.11 --locked --no-editable --dev python scripts/campaign_native_ci.py check-result

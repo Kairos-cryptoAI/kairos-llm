@@ -35,6 +35,7 @@ from kairos_persistence import (
     MigrationProfile,
     PersistenceSettings,
     ResearchAdaptiveCandidateProtocolRepository,
+    ResearchLLMAttemptStartV1,
     ResearchObservationScheduleRepository,
 )
 from kairos_persistence.database_target import connect_verified_database, require_database_target_url
@@ -43,8 +44,11 @@ from kairos_persistence.research_campaign import (
     ResearchCampaignPlanV1,
     ResearchCampaignRepository,
     ResearchCaptureRequirementV1,
+    ResearchCostReceiptV1,
+    ResearchDenominatorReceiptV1,
     ResearchReviewOutputV1,
 )
+from kairos_persistence.runtime import canonical_payload
 
 from kairos_llm.budget import BudgetedLLMGateway
 from kairos_llm.campaign import CAMPAIGN_SCHEDULER_SHA256, AdaptiveCampaignScheduler
@@ -53,7 +57,11 @@ from kairos_llm.errors import LLMBudgetError, LLMTimeout
 from kairos_llm.models import LLMWorkload, ModelRouter
 from kairos_llm.pricing import PriceTable
 from kairos_llm.proposals import LLMProposalOutputV1
-from kairos_llm.research import RESEARCH_INPUT_FEATURE_SHA256, ResearchPromptArtifactV1
+from kairos_llm.research import (
+    RESEARCH_INPUT_FEATURE_SHA256,
+    ResearchPromptArtifactV1,
+    ResearchProposalCoordinator,
+)
 from kairos_llm.schemas import LLMResult, TokenUsage
 
 T0 = 1_790_064_000_000
@@ -65,6 +73,8 @@ class _Connection:
         self.rows, self.sql = {}, []
         self.lock = asyncio.Lock()
         self.fail_terminal = False
+        self.review_record_delay_ms = 0
+        self.terminal_record_delay_ms = 0
 
     async def execute(self, sql, *args):
         self.sql.append(sql)
@@ -76,6 +86,12 @@ class _Connection:
         row = dict(zip(columns.split(","), args, strict=True))
         if self.fail_terminal and row.get("kind") == "terminal":
             raise RuntimeError("injected receipt storage outage")
+        if table == "sim_adaptive_campaign_receipts":
+            if row.get("kind") == "review":
+                self.now += self.review_record_delay_ms
+            if row.get("kind") == "terminal":
+                self.now += self.terminal_record_delay_ms
+            row["recorded_at_ts_ms"] = self.now
         self.rows.setdefault(table, []).append(row)
 
     async def fetchval(self, sql, *args):
@@ -83,7 +99,8 @@ class _Connection:
         return self.now
 
     def select(self, sql, args):
-        table = re.search(r"FROM (\w+)", sql).group(1)
+        # EXTRACT(epoch FROM recorded_at) is a projection, not a table.
+        table = re.search(r"FROM (sim_\w+)", sql).group(1)
         rows = list(self.rows.get(table, []))
         for field, pos in re.findall(r"(?<![\w.])(\w+)=\$(\d+)", sql):
             rows = [x for x in rows if x.get(field) == args[int(pos) - 1]]
@@ -181,6 +198,8 @@ class _Gateway:
         self.router = ModelRouter()
         self.review_action, self.proposal_action = "ALLOW", "SHORT_BIAS"
         self.error, self.delay_ms = None, 0
+        self.bad_review_backend = False
+        self.observation_clock_offset_ms = 0
 
     async def complete(self, **kwargs):
         # Assert durable START really preceded every fixture provider invocation.
@@ -193,6 +212,8 @@ class _Gateway:
         if self.error:
             raise self.error
         self.connection.now += self.delay_ms
+        if self.observation_clock_offset_ms:
+            self.observation_clock["offset"] = self.observation_clock_offset_ms
         route = self.router.resolve(workload=kwargs["workload"])
         payload = json.loads(kwargs["user"].split("\n", 1)[1])
         schema = kwargs["schema"]
@@ -209,7 +230,9 @@ class _Gateway:
             content=parsed.model_dump_json(),
             parsed=parsed,
             model=route.choice.model,
-            resolved_model=route.choice.model,
+            resolved_model="other-review-backend"
+            if arm == "strategy-review" and self.bad_review_backend
+            else route.choice.model,
             provider=route.choice.provider.value,
             request_id="offline-fixture-request",
             effort=route.effort.value,
@@ -342,13 +365,15 @@ async def setup():
         )
     connection.now = T0 + 1_100
     underlying, budget, evaluator = _Gateway(connection), _Budget(), _Evaluator()
+    observation_clock = {"offset": 0}
+    underlying.observation_clock = observation_clock
     scheduler = AdaptiveCampaignScheduler(
         repository=repository,
         gateway=BudgetedLLMGateway(underlying, budget),
         evaluator=evaluator,
         review_prompt=prompt,
         proposal_prompt=prompt,
-        clock=lambda: connection.now,
+        clock=lambda: connection.now + observation_clock["offset"],
     )
     return SimpleNamespace(
         repository=repository,
@@ -387,6 +412,165 @@ async def test_no_intent_keeps_proposal_and_no_call_review_in_denominator(setup)
     outcomes = await setup.scheduler.run_once(setup.plan.campaign_id)
     assert [x.status for x in outcomes] == ["NO_INTENT", "NO_INTENT", "PROPOSAL"]
     assert len(setup.underlying.calls) == 1 and outcomes[1].attempt_id is None
+
+
+async def test_review_wrong_backend_is_unknown_costed_and_never_resent(setup):
+    setup.underlying.bad_review_backend = True
+    outcomes = await setup.scheduler.run_once(setup.plan.campaign_id)
+    assert [x.status for x in outcomes] == ["BASELINE", "UNKNOWN", "PROPOSAL"]
+    state = await setup.repository.window_state(setup.plan.campaign_id, "sample-1")
+    assert not any(kind == "review" for kind, _, _ in state)
+    review_terminal = next(
+        receipt
+        for (kind, arm, _), receipt in state.items()
+        if kind == "terminal" and arm == "strategy-review"
+    )
+    assert review_terminal.terminal_status == "UNRESOLVED"
+    denominator = await setup.repository.seal_denominator(setup.plan.campaign_id)
+    assert denominator.expected_outcomes == 3 and denominator.unknown_attempt_count == 1
+    assert denominator.committed_cost_microusd > 0
+    assert len({x.bundle_receipt_sha256 for x in outcomes}) == 1
+    assert len({x.evaluation_receipt_sha256 for x in outcomes}) == 1
+    assert len(setup.underlying.calls) == len(setup.budget.reserves) == len(setup.budget.commits) == 2
+    assert await setup.scheduler.run_once(setup.plan.campaign_id) == ()
+    assert len(setup.underlying.calls) == len(setup.budget.reserves) == len(setup.budget.commits) == 2
+    assert not denominator.economic_qualification and not denominator.live_orders_allowed
+
+
+@pytest.mark.parametrize("clock_offset", [-3_000, 3_000])
+async def test_response_clock_outside_frozen_bounds_keeps_unknown_without_resend(setup, clock_offset):
+    setup.underlying.observation_clock_offset_ms = clock_offset
+    outcomes = await setup.scheduler.run_once(setup.plan.campaign_id)
+    # A regressed clock can reject the proposal context before any reservation;
+    # an ahead clock leaves an independently recorded uncertain reservation.
+    assert [x.status for x in outcomes] == [
+        "BASELINE",
+        "UNKNOWN",
+        "BUDGET_BLOCKED" if clock_offset < 0 else "UNKNOWN",
+    ]
+    state = await setup.repository.window_state(setup.plan.campaign_id, "sample-1")
+    assert not any(kind in ("review", "terminal", "sample") for kind, _, _ in state)
+    denominator = await setup.repository.seal_denominator(setup.plan.campaign_id)
+    assert denominator.expected_outcomes == 3
+    assert denominator.unknown_attempt_count == (1 if clock_offset < 0 else 2)
+    assert denominator.committed_cost_microusd > 0
+    assert len(setup.underlying.calls) == 1
+    assert await setup.scheduler.run_once(setup.plan.campaign_id) == ()
+    assert len(setup.underlying.calls) == 1
+
+
+@pytest.mark.parametrize("decision_kind", ["review", "terminal"])
+async def test_actual_db_recording_cutoff_prevents_timely_outcome_and_causal_replay(setup, decision_kind):
+    setattr(setup.connection, decision_kind + "_record_delay_ms", 4_000)
+    outcomes = await setup.scheduler.run_once(setup.plan.campaign_id)
+    assert [x.status for x in outcomes] == (
+        ["BASELINE", "LATE", "MISSED"] if decision_kind == "review" else ["BASELINE", "ALLOW", "LATE"]
+    )
+    late = outcomes[1 if decision_kind == "review" else 2]
+    state = await setup.repository.window_state(setup.plan.campaign_id, "sample-1")
+    decision = state[(decision_kind, late.arm_id, late.attempt_id)]
+    assert decision.observed_at_ts_ms < setup.schedule.windows[0].paired_at_ts_ms
+    assert (
+        await setup.repository.decision_recorded_at(
+            campaign_id=late.campaign_id,
+            sample_id=late.sample_id,
+            arm_id=late.arm_id,
+            attempt_id=late.attempt_id,
+        )
+        > setup.schedule.windows[0].paired_at_ts_ms
+    )
+    assert not any(kind == "sample" and arm == late.arm_id for kind, arm, _ in state)
+    # Corruption simulation only: remove the already-written outcome to exercise
+    # fresh repository admission; a real append-only database forbids this edit.
+    rows = setup.connection.rows["sim_adaptive_campaign_receipts"]
+    rows.remove(next(x for x in rows if x["kind"] == "outcome" and x["arm_id"] == late.arm_id))
+    forged = ResearchArmOutcomeV1.model_validate(
+        {
+            **late.model_dump(mode="json"),
+            "receipt_sha256": None,
+            "status": "ALLOW" if decision_kind == "review" else "PROPOSAL",
+        }
+    )
+    with pytest.raises(MessageIdentityConflict, match="independent attempt history"):
+        await setup.repository.record_outcome(forged)
+    assert await setup.repository.record_outcome(late)
+    denominator = await setup.repository.seal_denominator(setup.plan.campaign_id)
+    assert denominator.status_counts["LATE"] == 1 and denominator.expected_outcomes == 3
+
+
+@pytest.mark.parametrize(
+    "changed_field",
+    ["expected_outcomes", "outcome_ids_sha256", "status_counts", "recording_mode", "plan_receipt_sha256"],
+)
+async def test_denominator_replay_rejects_canonical_but_inconsistent_snapshot(setup, changed_field):
+    await setup.scheduler.run_once(setup.plan.campaign_id)
+    denominator = await setup.repository.seal_denominator(setup.plan.campaign_id)
+    payload = denominator.model_dump(mode="json")
+    payload.update(receipt_sha256=None)
+    payload[changed_field] = {
+        "expected_outcomes": 6,
+        "outcome_ids_sha256": "0" * 64,
+        "status_counts": {"NO_INTENT": 3},
+        "recording_mode": "CAUSAL_OBSERVATION",
+        "plan_receipt_sha256": "0" * 64,
+    }[changed_field]
+    wrong = ResearchDenominatorReceiptV1.model_validate(payload)
+    encoded, digest = canonical_payload(wrong.model_dump(mode="json"))
+    setup.connection.rows["sim_adaptive_campaign_denominators"][0].update(
+        payload_json=encoded, payload_sha256=digest, receipt_sha256=wrong.receipt_sha256
+    )
+    writes = len(setup.connection.sql)
+    with pytest.raises(MessageIdentityConflict, match="stored denominator"):
+        await setup.repository.seal_denominator(setup.plan.campaign_id)
+    assert all("INSERT" not in x for x in setup.connection.sql[writes:])
+    assert len(setup.underlying.calls) == 2
+
+
+async def test_denominator_replay_rechecks_three_arm_roster(setup):
+    await setup.scheduler.run_once(setup.plan.campaign_id)
+    await setup.repository.seal_denominator(setup.plan.campaign_id)
+    rows = setup.connection.rows["sim_adaptive_campaign_receipts"]
+    rows.remove(next(x for x in rows if x["kind"] == "outcome"))
+    with pytest.raises(MessageIdentityConflict, match="every preregistered window"):
+        await setup.repository.seal_denominator(setup.plan.campaign_id)
+
+
+@pytest.mark.parametrize("recorded_at", [None, True, "1", -1])
+async def test_completion_recording_clock_missing_or_untyped_fails_closed(setup, recorded_at):
+    outcomes = await setup.scheduler.run_once(setup.plan.campaign_id)
+    review = outcomes[1]
+    rows = setup.connection.rows["sim_adaptive_campaign_receipts"]
+    next(x for x in rows if x["kind"] == "review")["recorded_at_ts_ms"] = recorded_at
+    with pytest.raises(MessageIdentityConflict, match="recording clock"):
+        await setup.repository.decision_recorded_at(
+            campaign_id=review.campaign_id,
+            sample_id=review.sample_id,
+            arm_id=review.arm_id,
+            attempt_id=review.attempt_id,
+        )
+
+
+async def test_denominator_late_costs_do_not_rewrite_point_in_time_snapshot(setup):
+    setup.underlying.error = LLMTimeout("offline fixture timeout")
+    await setup.scheduler.run_once(setup.plan.campaign_id)
+    original = await setup.repository.seal_denominator(setup.plan.campaign_id)
+    state = await setup.repository.window_state(setup.plan.campaign_id, "sample-1")
+    held = next(x for (kind, _, _), x in state.items() if kind == "cost" and x.stage == "RESERVED")
+    setup.connection.now += 60_000
+    for stage in ("COMMIT_REQUESTED", "COMMITTED"):
+        assert await setup.repository.record_cost(
+            ResearchCostReceiptV1(
+                campaign_id=held.campaign_id,
+                sample_id=held.sample_id,
+                arm_id=held.arm_id,
+                attempt_id=held.attempt_id,
+                stage=stage,
+                amount_microusd=1,
+                observed_at_ts_ms=setup.connection.now,
+            )
+        )
+    assert await setup.repository.seal_denominator(setup.plan.campaign_id) == original
+    assert original.committed_cost_microusd == 0 and original.outstanding_reservation_microusd > 0
 
 
 @pytest.mark.parametrize("kind", ["missing", "stale", "late"])
@@ -550,7 +734,7 @@ def test_cli_missing_explicit_db_is_sanitized_zero_calls(monkeypatch, capsys):
 
 
 async def test_native_three_arm_scheduler_and_restart_on_explicit_disposable_campaign_db(setup):
-    """No migration/provider: parent acceptance must install the exact 027 schema first."""
+    """Real PG/reconnect/UNKNOWN; injected responses/budget/evaluator only, no paid calls."""
     url = os.getenv("KAIROS_RESEARCH_CAMPAIGN_TEST_DATABASE_URL")
     if not url:
         pytest.skip("explicit disposable RESEARCH_CAMPAIGN test DB required")
@@ -562,20 +746,27 @@ async def test_native_three_arm_scheduler_and_restart_on_explicit_disposable_cam
     if namespace.version != 4 or namespace.hex != name.removeprefix(prefix):
         raise RuntimeError("native campaign requires exact UUID4 database identity")
     require_database_target_url(url, name, local_only=True)
-    database = Database(
-        PersistenceSettings(
-            _env_file=None, database_url=url, pool_min_size=1, pool_max_size=3, command_timeout_s=5
-        ),
-        migration_profile=MigrationProfile.RESEARCH_CAMPAIGN,
-    )
-    await connect_verified_database(database, name, local_only=True)
-    try:
-        await database.verify_schema()
-        repository = ResearchCampaignRepository(database)
+
+    async def connect():
+        current = Database(
+            PersistenceSettings(
+                _env_file=None, database_url=url, pool_min_size=1, pool_max_size=3, command_timeout_s=5
+            ),
+            migration_profile=MigrationProfile.RESEARCH_CAMPAIGN,
+        )
+        try:
+            await connect_verified_database(current, name, local_only=True)
+            await current.verify_schema()  # Verify only; never migrations from this target.
+        except BaseException:
+            await current.close()
+            raise
+        return current, ResearchCampaignRepository(current)
+
+    async def preregister(database, repository, scenario):
         now = await repository.clock()
         values = setup.schedule.identity_payload()
         values.update(
-            campaign_id="native-three-arm-" + uuid4().hex[:12],
+            campaign_id="native-" + scenario + "-" + uuid4().hex[:12],
             windows=[
                 {
                     **setup.schedule.windows[0].model_dump(mode="json"),
@@ -616,10 +807,14 @@ async def test_native_three_arm_scheduler_and_restart_on_explicit_disposable_cam
                 source_as_of_ts_ms=now,
                 content={"symbol": "BTCUSDT", "close": 100},
             )
-        await asyncio.sleep(
-            max(0, (schedule.windows[0].market_as_of_ts_ms - await repository.clock()) / 1_000)
-        )
+        return schedule, protocol, plan
 
+    async def wait_for(repository, target):
+        # Actual independent DB clock only. No backdating or private time override.
+        while (remaining := target - await repository.clock()) > 0:
+            await asyncio.sleep(min(0.05, remaining / 1_000))
+
+    def scheduler_for(repository, plan, *, no_intent=False):
         class NativeFixtureGateway(_Gateway):
             async def complete(self, **kwargs):
                 arm = (
@@ -634,23 +829,129 @@ async def test_native_three_arm_scheduler_and_restart_on_explicit_disposable_cam
                 self.connection.rows = {"sim_adaptive_campaign_receipts": [{"kind": "start", "arm_id": arm}]}
                 return await super().complete(**kwargs)
 
-        gateway = NativeFixtureGateway(SimpleNamespace(rows={}, now=0))
-        budget = _Budget()
+        gateway, budget, evaluator = (
+            NativeFixtureGateway(SimpleNamespace(rows={}, now=0)),
+            _Budget(),
+            _Evaluator(),
+        )
+        evaluator.no_intent = no_intent
         scheduler = AdaptiveCampaignScheduler(
             repository=repository,
             gateway=BudgetedLLMGateway(gateway, budget),
-            evaluator=_Evaluator(),
+            evaluator=evaluator,
             review_prompt=setup.scheduler.review_prompt,
             proposal_prompt=setup.scheduler.proposal_prompt,
             clock=lambda: time.time_ns() // 1_000_000,
         )
-        results = await scheduler.run_once(plan.campaign_id)
-        assert [x.status for x in results] == ["BASELINE", "ALLOW", "PROPOSAL"]
-        assert len({x.bundle_receipt_sha256 for x in results}) == 1
-        denominator = await repository.seal_denominator(plan.campaign_id)
-        assert denominator.expected_outcomes == 3 and denominator.committed_cost_microusd > 0
-        assert not denominator.economic_qualification and not denominator.live_orders_allowed
-        assert await scheduler.run_once(plan.campaign_id) == ()
-        assert len(gateway.calls) == len(budget.reserves) == len(budget.commits) == 2
-    finally:
-        await database.close()
+        return scheduler, gateway, budget, evaluator
+
+    async with asyncio.timeout(25):
+        database, repository = await connect()
+        try:
+            # Happy path: real DB receipt persistence, then a genuinely fresh
+            # connection, repository, scheduler, evaluator and gateway instance.
+            schedule, _, plan = await preregister(database, repository, "matched")
+            await wait_for(repository, schedule.windows[0].market_as_of_ts_ms)
+            scheduler, gateway, budget, _ = scheduler_for(repository, plan)
+            results = await scheduler.run_once(plan.campaign_id)
+            assert [x.status for x in results] == ["BASELINE", "ALLOW", "PROPOSAL"]
+            assert len({x.bundle_receipt_sha256 for x in results}) == 1
+            assert len({x.evaluation_receipt_sha256 for x in results}) == 1
+            denominator = await repository.seal_denominator(plan.campaign_id)
+            assert denominator.expected_outcomes == 3 and denominator.committed_cost_microusd > 0
+            assert not denominator.economic_qualification and not denominator.live_orders_allowed
+            assert len(gateway.calls) == len(budget.reserves) == len(budget.commits) == 2
+            await database.close()
+            database, repository = await connect()
+            scheduler, replay_gateway, replay_budget, replay_evaluator = scheduler_for(repository, plan)
+            assert await scheduler.run_once(plan.campaign_id) == ()
+            assert await repository.seal_denominator(plan.campaign_id) == denominator
+            assert len(replay_gateway.calls) == len(replay_budget.reserves) == len(replay_budget.commits) == 0
+            assert replay_evaluator.calls == 0
+
+            # NO_INTENT is in the same three-arm denominator; review is not
+            # called, but a contrary proposal remains non-trading observation.
+            schedule, _, plan = await preregister(database, repository, "no-intent")
+            await wait_for(repository, schedule.windows[0].market_as_of_ts_ms)
+            scheduler, gateway, budget, _ = scheduler_for(repository, plan, no_intent=True)
+            results = await scheduler.run_once(plan.campaign_id)
+            assert [x.status for x in results] == ["NO_INTENT", "NO_INTENT", "PROPOSAL"]
+            assert len({x.bundle_receipt_sha256 for x in results}) == 1
+            assert len({x.evaluation_receipt_sha256 for x in results}) == 1
+            state = await repository.window_state(plan.campaign_id, "sample-1")
+            assert not any(kind == "start" and arm == "strategy-review" for kind, arm, _ in state)
+            assert len(gateway.calls) == len(budget.reserves) == 1
+            denominator = await repository.seal_denominator(plan.campaign_id)
+            assert denominator.status_counts == {"NO_INTENT": 2, "PROPOSAL": 1}
+
+            # Simulate process interruption at the durable pre-dispatch fence,
+            # not a fabricated provider success. Fixture budget costs are held;
+            # no real paid ledger/provider is contacted by this acceptance test.
+            schedule, protocol, plan = await preregister(database, repository, "unknown-start")
+            await wait_for(repository, schedule.windows[0].market_as_of_ts_ms)
+            scheduler, gateway, budget, evaluator = scheduler_for(repository, plan)
+            claim = await repository.claim_next(plan.campaign_id)
+            assert claim is not None
+            bundle = await repository.freeze_bundle(claim)
+            sources = await repository.resolve_causal_sources(
+                campaign_id=plan.campaign_id,
+                sample_id=claim.sample_id,
+                source_receipt_sha256s=bundle.source_receipt_sha256s,
+            )
+            intent = await evaluator.evaluate(window=schedule.windows[0], sources=sources)
+            await repository.record_evaluation(claim=claim, bundle=bundle, intent=intent)
+            injected = scheduler._gateway(claim, "llm-proposal-research")
+            coordinator = ResearchProposalCoordinator(injected, repository)
+            context, _, attempt_id = await coordinator._prepare(
+                schedule,
+                protocol,
+                claim.sample_id,
+                scheduler.proposal_prompt,
+                bundle.source_receipt_sha256s,
+                scheduler.proposal_prompt.workload,
+            )
+            await injected.budget.reserve(
+                reservation_id=attempt_id,
+                reserved_microusd=100,
+            )
+            arm, window = protocol.arms[2], schedule.windows[0]
+            start = ResearchLLMAttemptStartV1(
+                attempt_id=attempt_id,
+                budget_reservation_id=attempt_id,
+                campaign_id=plan.campaign_id,
+                sample_id=claim.sample_id,
+                arm_id="llm-proposal-research",
+                schedule_digest=schedule.schedule_digest,
+                candidate_protocol_digest=protocol.protocol_digest,
+                arm_protocol_digest=protocol.arm_digest("llm-proposal-research"),
+                symbol=window.symbol,
+                timeframe=window.timeframe,
+                market_as_of_ts_ms=window.market_as_of_ts_ms,
+                market_snapshot_sha256=context.market_snapshot_sha256,
+                sample_deadline_ts_ms=window.sample_deadline_ts_ms,
+                provider=arm.provider,
+                requested_model=arm.model,
+                prompt_sha256=arm.prompt_sha256,
+                attempt_started_at_ts_ms=await repository.clock(),
+            )
+            assert await repository.start_attempt(start)
+            assert not gateway.calls and len(budget.reserves) == 1 and not budget.commits
+            await database.close()
+            database, repository = await connect()
+            scheduler, gateway, budget, evaluator = scheduler_for(repository, plan)
+            assert await repository.find_attempt(attempt_id) == (start, None)
+            assert await scheduler.run_once(plan.campaign_id) == ()
+            await wait_for(repository, window.paired_at_ts_ms)
+            results = await scheduler.reconcile(plan.campaign_id)
+            assert [x.status for x in results] == ["BASELINE", "MISSED", "UNKNOWN"]
+            assert len({x.bundle_receipt_sha256 for x in results}) == 1
+            assert len({x.evaluation_receipt_sha256 for x in results}) == 1
+            denominator = await repository.seal_denominator(plan.campaign_id)
+            assert denominator.expected_outcomes == 3 and denominator.unknown_attempt_count == 1
+            assert denominator.outstanding_reservation_microusd == 100
+            assert denominator.committed_cost_microusd == 0
+            assert await scheduler.run_once(plan.campaign_id) == ()
+            assert not gateway.calls and not budget.reserves and not budget.commits and evaluator.calls == 0
+            assert not denominator.economic_qualification and not denominator.live_orders_allowed
+        finally:
+            await database.close()

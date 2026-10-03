@@ -43,11 +43,13 @@ from .research import (
 
 CAMPAIGN_SCHEDULER_SHA256 = canonical_sha256(
     {
-        "contract_version": "adaptive-campaign-scheduler.v1",
+        "contract_version": "adaptive-campaign-scheduler.v2",
         "claims": "durable-once-no-reclaim",
         "capture": "db-observed-before-decision-cutoff.v1",
         "arms": "fixed-three-matched",
         "denominator": "all-scheduled-including-missing-late-unknown",
+        "backend": "requested-and-resolved-exact-preregistered.v1",
+        "completion_clock": "pg-recorded-at-authoritative-with-frozen-local-skew.v1",
         "authority": "SIM_RESEARCH_ONLY",
     }
 )
@@ -185,6 +187,13 @@ class AdaptiveCampaignScheduler:
                     observation.terminal is not None
                     and not observation.unresolved
                     and observation.terminal.observed_at_ts_ms <= window.paired_at_ts_ms
+                    and await self.repository.decision_recorded_at(
+                        campaign_id=claim.campaign_id,
+                        sample_id=claim.sample_id,
+                        arm_id="llm-proposal-research",
+                        attempt_id=observation.start.attempt_id,
+                    )
+                    <= window.paired_at_ts_ms
                 ):
                     await coordinator.replay_sample(
                         schedule=schedule,
@@ -356,10 +365,8 @@ class AdaptiveCampaignScheduler:
                 raise ResearchEvidenceError(
                     "review cited unprovided evidence or inconsistent parsed response"
                 )
-            if not result.resolved_model or not result.request_id:
-                raise ResearchEvidenceError(
-                    "review completion lacks concrete provider backend/request identity"
-                )
+            if result.resolved_model != arm.model or not result.request_id:
+                raise ResearchEvidenceError("review completion differs from frozen model/request identity")
             result = replace(
                 result,
                 budget_reservation_id=attempt_id,
@@ -387,7 +394,12 @@ class AdaptiveCampaignScheduler:
             if budget.start is not None:
                 coordinator = ResearchProposalCoordinator(self.gateway, self.repository, clock=self.clock)
                 terminal = coordinator._failure_terminal(budget.start, observed, exc)
-                await coordinator._finish(terminal)
+                try:
+                    await coordinator._finish(terminal)
+                except ResearchEvidenceError:
+                    # Unrecordable/ambiguous completion leaves the durable START
+                    # and observed costs intact. Account UNKNOWN, never resend.
+                    pass
             if isinstance(exc, asyncio.CancelledError) or not isinstance(exc, Exception):
                 raise
 
@@ -434,7 +446,18 @@ class AdaptiveCampaignScheduler:
                 decision = review or terminal
                 if decision is None or (terminal is not None and terminal.terminal_status == "UNRESOLVED"):
                     status = "UNKNOWN"
-                elif decision.observed_at_ts_ms > window.paired_at_ts_ms:
+                elif (
+                    decision.observed_at_ts_ms > window.paired_at_ts_ms
+                    or (
+                        await self.repository.decision_recorded_at(
+                            campaign_id=claim.campaign_id,
+                            sample_id=claim.sample_id,
+                            arm_id=arm_id,
+                            attempt_id=attempt.attempt_id,
+                        )
+                    )
+                    > window.paired_at_ts_ms
+                ):
                     status = "LATE"
                 elif review is not None:
                     status = review.output.action
