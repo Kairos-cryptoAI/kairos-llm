@@ -25,6 +25,7 @@ from kairos_core import (
     canonical_sha256,
 )
 from kairos_core.research_pairing import ScheduledResearchSampleV1, build_research_decision_sample
+from kairos_persistence.research_campaign import ResearchCampaignRepository
 from kairos_persistence.research_evidence import (
     ResearchLLMAttemptStartV1,
     ResearchLLMAttemptTerminalV1,
@@ -419,9 +420,25 @@ class ResearchProposalCoordinator:
             ):
                 raise ResearchEvidenceError("stored source differs from the sample or causal cutoff")
         markets = [source for source in sources if source.source_kind == "MARKET_SNAPSHOT"]
+        # Only an explicitly constructed, independently preregistered new
+        # campaign repository can resolve delayed-but-causal captured bars.
+        # Generic/legacy SIM journals retain their exact timestamp semantics.
+        if isinstance(self.journal, ResearchCampaignRepository):
+            await self.journal.resolve_causal_sources(
+                campaign_id=schedule.campaign_id,
+                sample_id=sample_id,
+                source_receipt_sha256s=tuple(sorted(source_hashes)),
+            )
+            market_clock_matches = (
+                len(markets) == 1 and markets[0].source_as_of_ts_ms < window.market_as_of_ts_ms
+            )
+        else:
+            market_clock_matches = (
+                len(markets) == 1 and markets[0].source_as_of_ts_ms == window.market_as_of_ts_ms
+            )
         if (
             len(markets) != 1
-            or markets[0].source_as_of_ts_ms != window.market_as_of_ts_ms
+            or not market_clock_matches
             or (
                 window.market_snapshot_sha256 is not None
                 and markets[0].content_sha256 != window.market_snapshot_sha256

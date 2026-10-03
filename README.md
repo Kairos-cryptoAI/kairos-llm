@@ -205,7 +205,48 @@ uv run --locked kairos-llm-qualify `
   --output $env:TEMP\kairos-openai-text-scout-qualification.json
 ```
 
-## Local development
+## Opt-in three-arm adaptive campaign scheduler
+
+`AdaptiveCampaignScheduler` in `kairos_llm.campaign` executes a preregistered
+future roster through the independent RESEARCH_CAMPAIGN PostgreSQL journal.
+It is not wired into default services, routing, Risk Manager or execution.
+The caller explicitly supplies one frozen evaluator, immutable prompt artifacts
+and an existing budgeted gateway with `max_retries=0` and unchanged shared caps.
+Strategy-only, strategy-review and LLM-proposal-research share exactly one
+captured market/news/macro bundle and one independent evaluator receipt.
+
+The review arm emits separately recorded `ALLOW/VETO/DEFER`; a proposal is
+still observed when strategy emits no intent. Neither can create an order or
+`RiskTradeDecision`. Every due window receives all three denominator outcomes,
+including missing/stale input, no-intent, budget denial, failure, late response
+and uncertainty. A committed window claim is never re-evaluated or resent
+after restart. Durable START is saved before dispatch; bare START remains
+unknown. Budget-operation fences distinguish known denial from uncertain
+reservation/commit, retaining conservative cost bounds without retries.
+
+The new typed repository's frozen causal resolver permits a decision cutoff
+after recorded market close; legacy coordinator/SIM25 exact-clock checks stay
+unchanged. Actual DB capture time cannot be substituted by caller timestamps.
+Successful causal sample replay is independently rederived, including its
+frozen arm protocol digest. The scheduler denominator is engineering coverage
+only, not a scientific seal or PAPER/ALPHA/LIVE qualification.
+
+`python -m kairos_llm.campaign_cli` accepts `verify`, `tick-offline`,
+`reconcile-offline` and `seal-denominator`. It requires an explicit
+`KAIROS_RESEARCH_CAMPAIGN_DATABASE_URL`, verifies the already installed schema,
+never creates/migrates a DB, reads no `.env` or keys and constructs no API client.
+Tick/reconcile permit only a preregistered `OFFLINE_ENGINEERING_FIXTURE` plan
+with the exact `OFFLINE_NO_INTENT_EVALUATOR_SHA256`; arbitrary frozen evaluators
+cannot be impersonated by the no-intent fixture. Prompt JSON is a bounded
+existing artifact containing only `review_prompt` and `proposal_prompt`.
+No CLI command starts a real research campaign or enables trading.
+
+Consumer contract tests are opt-in when pinned Text/Macro/Router packages are
+installed: absent packages are explicit skips, not proof. Offline doubles prove
+the scheduler algorithms but not PG DDL/permissions, real feed acquisition,
+provider quality/cost or future alpha. These remain independent acceptance work.
+
+## Local development checks
 
 ```powershell
 python -m uv sync --locked
