@@ -691,7 +691,7 @@ requires-dist = [
     { name = "kairos-persistence", marker = "extra == 'campaign'", git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git?rev=fd2966761e84b32688c9aee73e00604965f5d7f2" },
     { name = "kairos-persistence", marker = "extra == 'qualification'", git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git?rev=fd2966761e84b32688c9aee73e00604965f5d7f2" },
     { name = "kairos-router", marker = "extra == 'campaign'", git = "https://github.com/Kairos-cryptoAI/kairos-router.git?rev=cd2af6e9f3516b2a18dfb022210a70b7084c1840" },
-    { name = "kairos-strategy-engine", marker = "extra == 'campaign'", git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git?rev=ccf1ff189b3c84e058c617512d92487006a58206" },
+    { name = "kairos-strategy-engine", marker = "extra == 'campaign'", git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git?rev=cde8e9c00af0cc19848e800ee76472a800a5fd5d" },
     { name = "openai", specifier = ">=2.45,<3" },
     { name = "pydantic", specifier = ">=2.6,<3" },
     { name = "pydantic-settings", specifier = ">=2.2,<3" },
@@ -704,7 +704,7 @@ dev = [
     { name = "build", specifier = ">=1.2,<2" },
     { name = "kairos-persistence", git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git?rev=fd2966761e84b32688c9aee73e00604965f5d7f2" },
     { name = "kairos-router", git = "https://github.com/Kairos-cryptoAI/kairos-router.git?rev=cd2af6e9f3516b2a18dfb022210a70b7084c1840" },
-    { name = "kairos-strategy-engine", git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git?rev=ccf1ff189b3c84e058c617512d92487006a58206" },
+    { name = "kairos-strategy-engine", git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git?rev=cde8e9c00af0cc19848e800ee76472a800a5fd5d" },
     { name = "mypy", specifier = ">=1.10,<3" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
@@ -735,8 +735,8 @@ dependencies = [
 
 [[package]]
 name = "kairos-strategy-engine"
-version = "0.2.11"
-source = { git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git?rev=ccf1ff189b3c84e058c617512d92487006a58206#ccf1ff189b3c84e058c617512d92487006a58206" }
+version = "0.2.12"
+source = { git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git?rev=cde8e9c00af0cc19848e800ee76472a800a5fd5d#cde8e9c00af0cc19848e800ee76472a800a5fd5d" }
 dependencies = [
     { name = "kairos-core" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
