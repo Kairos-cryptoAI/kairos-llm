@@ -9,19 +9,28 @@ import pytest
 from kairos_core import canonical_sha256
 from kairos_core.config import DEFAULT_TRADING_SYMBOLS
 from kairos_persistence.research_campaign import ResearchCampaignRepository, ResearchReviewOutputV1
-from kairos_persistence.source_state import QUALIFICATION_CAMPAIGN_ID, SourceStateRepository
+from kairos_persistence.source_state import (
+    QUALIFICATION_CAMPAIGN_ID,
+    SourceBudgetExceeded,
+    SourceStateRepository,
+)
 from kairos_persistence.usage_budget import CampaignLLMUsageBudget
 from kairos_strategy.campaign import CausalStrategyEvaluator
 from pydantic import BaseModel
 
 from kairos_llm.budget import BudgetedLLMGateway
-from kairos_llm.campaign import CAMPAIGN_SCHEDULER_SHA256, AdaptiveCampaignScheduler
+from kairos_llm.campaign import (
+    CAMPAIGN_SCHEDULER_SHA256,
+    AdaptiveCampaignScheduler,
+    _IndependentBudgetObserver,
+)
 from kairos_llm.causal_campaign import (
     CausalAdaptiveCampaignScheduler,
     CausalReviewContextProjector,
     CausalRouterContextPolicyV1,
     causal_campaign_scheduler_sha256,
 )
+from kairos_llm.errors import LLMBudgetError
 from kairos_llm.models import LLMWorkload, ModelRouter
 from kairos_llm.proposals import LLMProposalOutputV1
 from kairos_llm.research import (
@@ -61,6 +70,36 @@ class _Evaluator:
     artifact_sha256 = "e" * 64
     strategy_id = "fixture"
     strategy_revision = "1"
+
+
+async def test_known_postgresql_budget_denial_is_recorded_without_provider_or_start():
+    stages = []
+
+    class KnownDeniedBudget:
+        async def reserve(self, **_kwargs):
+            raise SourceBudgetExceeded("private ledger detail must not escape")
+
+    class RecordingRepository:
+        async def record_cost(self, receipt):
+            stages.append(receipt.stage)
+
+        async def clock(self):
+            return 1_800_000_000_000
+
+    observer = _IndependentBudgetObserver(
+        KnownDeniedBudget(),
+        RecordingRepository(),
+        SimpleNamespace(campaign_id="fixture", sample_id="sample"),
+        "strategy-review",
+    )
+    with pytest.raises(LLMBudgetError, match="shared durable provider budget denied"):
+        await observer.reserve(
+            provider="openai",
+            reservation_id="attempt",
+            reserved_microusd=10,
+            monthly_budget_microusd=12_000_000,
+        )
+    assert stages == ["RESERVATION_REQUESTED", "RESERVATION_DENIED"]
 
 
 def _review_validation_target(scheduler_type, review_schema):

@@ -27,6 +27,7 @@ from kairos_persistence.research_campaign import (
     ResearchWindowClaimV1,
 )
 from kairos_persistence.research_evidence import ResearchLLMAttemptStartV1, ResearchSourceReceiptV1
+from kairos_persistence.source_state import SourceBudgetExceeded
 from pydantic import BaseModel
 
 from .budget import BudgetedLLMGateway, LLMUsageBudget
@@ -74,9 +75,9 @@ class _IndependentBudgetObserver:
         await self._save(kwargs["reservation_id"], "RESERVATION_REQUESTED", kwargs["reserved_microusd"])
         try:
             await self.budget.reserve(**kwargs)
-        except LLMBudgetError:
+        except (LLMBudgetError, SourceBudgetExceeded):
             await self._save(kwargs["reservation_id"], "RESERVATION_DENIED", 0)
-            raise
+            raise LLMBudgetError("shared durable provider budget denied the reservation") from None
         await self._save(kwargs["reservation_id"], "RESERVED", kwargs["reserved_microusd"])
 
     async def commit(self, **kwargs) -> None:
