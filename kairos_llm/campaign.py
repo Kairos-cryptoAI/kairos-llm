@@ -27,6 +27,7 @@ from kairos_persistence.research_campaign import (
     ResearchWindowClaimV1,
 )
 from kairos_persistence.research_evidence import ResearchLLMAttemptStartV1, ResearchSourceReceiptV1
+from pydantic import BaseModel
 
 from .budget import BudgetedLLMGateway, LLMUsageBudget
 from .errors import LLMBudgetError
@@ -242,7 +243,7 @@ class AdaptiveCampaignScheduler:
         ):
             raise ResearchEvidenceError("evaluator differs from independently frozen source identity")
         for arm, prompt, schema in (
-            (protocol.arms[1], self.review_prompt, ResearchReviewOutputV1),
+            (protocol.arms[1], self.review_prompt, self._review_output_schema()),
             (protocol.arms[2], self.proposal_prompt, LLMProposalOutputV1),
         ):
             route = self.gateway.router.resolve(workload=prompt.workload)
@@ -267,6 +268,16 @@ class AdaptiveCampaignScheduler:
             ):
                 raise ResearchEvidenceError("research arm route/prompt/schema differs from preregistration")
         return plan, schedule, protocol
+
+    def _review_output_schema(self) -> type[BaseModel]:
+        """Return the schema whose exact identity is preregistered for review.
+
+        The default scheduler remains bound to the original persistence
+        contract. Explicit native compositions may override this hook and must
+        still preregister the returned schema digest before execution.
+        """
+
+        return ResearchReviewOutputV1
 
     def _input_feature_sha256(self, arm_id: str) -> str:
         return RESEARCH_INPUT_FEATURE_SHA256

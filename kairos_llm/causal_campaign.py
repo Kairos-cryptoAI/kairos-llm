@@ -236,7 +236,7 @@ class CausalAdaptiveCampaignScheduler(AdaptiveCampaignScheduler):
 
     def __init__(self, *, projector: CausalReviewContextProjector, **kwargs):
         self.projector = projector
-        self.scheduler_sha256 = causal_campaign_scheduler_sha256(projector)
+        self.scheduler_sha256 = self._scheduler_artifact(projector)
         super().__init__(**kwargs)
         if type(self.evaluator) is not CausalStrategyEvaluator:
             raise ResearchEvidenceError("causal campaign requires the actual registered strategy adapter")
@@ -245,7 +245,7 @@ class CausalAdaptiveCampaignScheduler(AdaptiveCampaignScheduler):
     def _assert_causal(self):
         if (
             self.repository.causal_scheduler_sha256 != self.scheduler_sha256
-            or causal_campaign_scheduler_sha256(self.projector) != self.scheduler_sha256
+            or self._scheduler_artifact(self.projector) != self.scheduler_sha256
         ):
             raise ResearchEvidenceError("repository/scheduler lacks this exact frozen causal opt-in")
         budget = self.gateway.budget
@@ -255,6 +255,16 @@ class CausalAdaptiveCampaignScheduler(AdaptiveCampaignScheduler):
             or budget.repository.campaign_id != QUALIFICATION_CAMPAIGN_ID
         ):
             raise ResearchEvidenceError("causal campaign requires the existing shared durable usage budget")
+
+    def _scheduler_artifact(self, projector: CausalReviewContextProjector) -> str:
+        """Return the frozen causal scheduler identity for this composition.
+
+        The default preserves the existing causal identity. A separately
+        versioned subclass may bind additional source artifacts, while the
+        repository opt-in and every later integrity check remain exact.
+        """
+
+        return causal_campaign_scheduler_sha256(projector)
 
     async def _validate(self, campaign_id):
         self._assert_causal()
