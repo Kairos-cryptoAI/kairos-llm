@@ -42,12 +42,12 @@ dev = [
 required-version = "==0.12.3"
 # Bind the maintained runtime dependencies without rewriting the frozen strategy source.
 override-dependencies = [
-    "kairos-core @ git+https://github.com/Kairos-cryptoAI/kairos-core.git@37165e3078b53364513f876f4243357ba19a19ba",
+    "kairos-core @ git+https://github.com/Kairos-cryptoAI/kairos-core.git@d52fd9734a27f76f8e2bdbf053d477b8e04b81c9",
     "kairos-persistence @ git+https://github.com/Kairos-cryptoAI/kairos-persistence.git@2d88a351fc045de5b58bbf6acae209341096a850",
 ]
 
 [tool.uv.sources]
-kairos-core = { git = "https://github.com/Kairos-cryptoAI/kairos-core.git", rev = "37165e3078b53364513f876f4243357ba19a19ba" }
+kairos-core = { git = "https://github.com/Kairos-cryptoAI/kairos-core.git", rev = "d52fd9734a27f76f8e2bdbf053d477b8e04b81c9" }
 kairos-persistence = { git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git", rev = "2d88a351fc045de5b58bbf6acae209341096a850" }
 kairos-router = { git = "https://github.com/Kairos-cryptoAI/kairos-router.git", rev = "604828c53a7f24c8ade8b2f4c3b1cb773016c3c2" }
 kairos-strategy-engine = { git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git", rev = "79020570cd1218152b4b8fe2195739a8e63b9c28" }
