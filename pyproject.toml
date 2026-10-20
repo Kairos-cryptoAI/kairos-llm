@@ -11,7 +11,7 @@ license = { text = "MIT" }
 requires-python = ">=3.11"
 authors = [{ name = "TheLitis" }]
 dependencies = [
-    "aiohttp>=3.10,<4",
+    "aiohttp>=3.14.4,<4",
     "kairos-core>=0.3,<0.4",
     "openai>=2.45,<3",
     "pydantic>=2.6,<3",
@@ -40,11 +40,16 @@ dev = [
 
 [tool.uv]
 required-version = "==0.12.3"
+# Bind the maintained runtime dependencies without rewriting the frozen strategy source.
+override-dependencies = [
+    "kairos-core @ git+https://github.com/Kairos-cryptoAI/kairos-core.git@37165e3078b53364513f876f4243357ba19a19ba",
+    "kairos-persistence @ git+https://github.com/Kairos-cryptoAI/kairos-persistence.git@2d88a351fc045de5b58bbf6acae209341096a850",
+]
 
 [tool.uv.sources]
-kairos-core = { git = "https://github.com/Kairos-cryptoAI/kairos-core.git", rev = "6937eb4773fc00afaf5ba4e020b28b689f48e377" }
-kairos-persistence = { git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git", rev = "11df49ce455b89fd252d5f3d948099a8e9211cb3" }
-kairos-router = { git = "https://github.com/Kairos-cryptoAI/kairos-router.git", rev = "ac02f94f1380f4890334321065b3f668c367dbce" }
+kairos-core = { git = "https://github.com/Kairos-cryptoAI/kairos-core.git", rev = "37165e3078b53364513f876f4243357ba19a19ba" }
+kairos-persistence = { git = "https://github.com/Kairos-cryptoAI/kairos-persistence.git", rev = "2d88a351fc045de5b58bbf6acae209341096a850" }
+kairos-router = { git = "https://github.com/Kairos-cryptoAI/kairos-router.git", rev = "604828c53a7f24c8ade8b2f4c3b1cb773016c3c2" }
 kairos-strategy-engine = { git = "https://github.com/Kairos-cryptoAI/kairos-strategy-engine.git", rev = "79020570cd1218152b4b8fe2195739a8e63b9c28" }
 
 [tool.hatch.build.targets.wheel]
