@@ -296,3 +296,33 @@ python -m uv build --no-sources
 ```
 
 Part of the [Kairos](https://github.com/Kairos-cryptoAI/kairos) system. MIT licensed.
+# Optional application-call evidence
+
+An explicitly supplied `LLMCallEvidenceSink` on `BudgetedLLMGateway` retains one
+create-only `started` record after a durable reservation and before the provider
+call, and one separately named `completed` record only after reply validation
+and the durable budget commit. Completion binds the exact attempt digest,
+provider/model/request/reservation identities, original clocks, token usage and
+committed microdollars. Records contain the application prompt/schema values and
+returned content, **not original provider HTTP bodies or provider-authenticated
+evidence**. No headers, API keys or environment values are accepted by this sink.
+
+The legacy `LLMResult.cached` flag describes provider input-token caching, not
+whole-response reuse. Evidence preserves that flag and token usage rather than
+discarding an otherwise valid billable reply or falsely labelling it uncached.
+Attempt/response clocks are application observation bounds around the gateway
+call, including local persistence and health callbacks, not exact HTTP timings.
+
+The sink is off by default. `CreateOnlyDirectorySink` requires a new private
+session directory, rejects symlink/reparse ancestry or directory replacement,
+creates owner-only files, and never overwrites conflicting evidence. Exact
+replay leaves original clocks unchanged. Oversized input is refused before any
+reservation/call. A failed initial write prevents the call but retains its hold;
+an unknown provider outcome retains the attempt/open hold; a failed completion
+write preserves committed cost and fails the caller. No automatic retry or
+budget reset is added. Partial files remain conflicts, not accepted records.
+
+This hook is not a registered LIVE input producer or a trading/alpha approval.
+Actual native source receipts, joined route/context/review evidence and
+independent deployment qualification remain necessary.
+

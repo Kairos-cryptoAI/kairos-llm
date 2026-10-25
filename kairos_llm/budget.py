@@ -13,6 +13,13 @@ from uuid import uuid4
 from kairos_core.enums import ReasoningEffort
 from pydantic import BaseModel
 
+from .call_evidence import (
+    LLMCallEvidenceSink,
+    build_call_attempt_record,
+    build_call_completion_record,
+    emit_call_evidence,
+    preflight_call_evidence,
+)
 from .errors import LLMBudgetError, LLMServerError
 from .gateway import LLMGateway
 from .models import LLMWorkload, Provider
@@ -74,6 +81,7 @@ class BudgetedLLMGateway:
         *,
         monthly_budgets_microusd: Mapping[Provider, int] | None = None,
         prices: PriceTable | None = None,
+        evidence_sink: LLMCallEvidenceSink | None = None,
     ) -> None:
         if gateway.settings.max_retries != 0:
             raise ValueError("budgeted LLM gateway requires max_retries=0")
@@ -93,6 +101,8 @@ class BudgetedLLMGateway:
         self.budget = budget
         self.monthly_budgets_microusd = configured
         self.prices = prices or PriceTable()
+        # Deliberately opt-in: the default gateway retains no prompt/response body.
+        self.evidence_sink = evidence_sink
 
     @property
     def settings(self):
@@ -125,7 +135,10 @@ class BudgetedLLMGateway:
         route = self.router.resolve(effort, workload=workload)
         if not self.prices.has_model(route.choice.model):
             raise LLMBudgetError("budgeted production calls require registered model pricing")
-        input_ceiling = self._input_token_ceiling(system, user, schema)
+        schema_bytes = self._schema_bytes(schema)
+        if self.evidence_sink is not None:
+            preflight_call_evidence(system=system, user=user, schema_bytes=schema_bytes)
+        input_ceiling = self._input_token_ceiling(system, user, schema, schema_bytes=schema_bytes)
         output_ceiling = min(self.settings.max_output_tokens, route.max_output_tokens)
         reserved_microusd = self._microusd(
             self.prices.reservation_cost(
@@ -133,6 +146,7 @@ class BudgetedLLMGateway:
                 TokenUsage(input_tokens=input_ceiling, output_tokens=output_ceiling),
             )
         )
+        call_id = uuid4().hex
         reservation_id = f"{provider_identity(route.choice.provider)}:{uuid4().hex}"
         await self.budget.reserve(
             provider=route.choice.provider.value,
@@ -141,6 +155,24 @@ class BudgetedLLMGateway:
             monthly_budget_microusd=self.monthly_budgets_microusd[route.choice.provider],
         )
         attempt_started_at_ts_ms = time.time_ns() // 1_000_000
+        attempt_record: bytes | None = None
+        if self.evidence_sink is not None:
+            attempt_record = build_call_attempt_record(
+                call_id=call_id,
+                system=system,
+                user=user,
+                schema_bytes=schema_bytes,
+                workload=workload.value,
+                effort=route.effort.value,
+                provider=route.choice.provider.value,
+                model=route.choice.model,
+                reservation_id=reservation_id,
+                reserved_microusd=reserved_microusd,
+                attempt_started_at_ms=attempt_started_at_ts_ms,
+            )
+            # If this create-only write fails, no provider call is made; the
+            # already-created reservation remains open for reconciliation.
+            emit_call_evidence(self.evidence_sink, call_id, "started", attempt_record)
         result = await self.gateway.complete(
             system=system,
             user=user,
@@ -169,12 +201,29 @@ class BudgetedLLMGateway:
             reservation_id=reservation_id,
             actual_microusd=actual_microusd,
         )
-        return replace(
+        budget_commit_observed_at_ms = time.time_ns() // 1_000_000
+        completed = replace(
             result,
             budget_reservation_id=reservation_id,
             attempt_started_at_ts_ms=attempt_started_at_ts_ms,
             response_observed_at_ts_ms=response_observed_at_ts_ms,
         )
+        if self.evidence_sink is not None:
+            # Evidence follows successful validation and the exact durable
+            # budget commit. A sink error fails the caller but never refunds,
+            # retries, or otherwise changes the already-committed spend.
+            if attempt_record is None:  # constructor/branch invariant
+                raise RuntimeError("completed evidence is missing its original attempt record")
+            record = build_call_completion_record(
+                call_id=call_id,
+                attempt_record=attempt_record,
+                result=completed,
+                reserved_microusd=reserved_microusd,
+                actual_microusd=actual_microusd,
+                budget_commit_observed_at_ms=budget_commit_observed_at_ms,
+            )
+            emit_call_evidence(self.evidence_sink, call_id, "completed", record)
+        return completed
 
     async def close(self) -> None:
         await self.gateway.close()
@@ -184,24 +233,32 @@ class BudgetedLLMGateway:
         system: str,
         user: str,
         schema: type[BaseModel] | None,
+        *,
+        schema_bytes: bytes | None = None,
     ) -> int:
         if not isinstance(system, str) or not isinstance(user, str):
             raise TypeError("LLM prompts must be strings")
-        schema_bytes = 0
-        if schema is not None:
-            encoded = json.dumps(
-                schema.model_json_schema(),
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            ).encode("utf-8")
-            schema_bytes = len(encoded)
+        exact_schema_bytes = (
+            schema_bytes if schema_bytes is not None else BudgetedLLMGateway._schema_bytes(schema)
+        )
+        schema_size = len(exact_schema_bytes)
         prompt_bytes = len(system.encode("utf-8")) + len(user.encode("utf-8"))
         return max(
             MINIMUM_INPUT_TOKEN_RESERVATION,
-            prompt_bytes + schema_bytes + INPUT_TOKEN_OVERHEAD,
+            prompt_bytes + schema_size + INPUT_TOKEN_OVERHEAD,
         )
+
+    @staticmethod
+    def _schema_bytes(schema: type[BaseModel] | None) -> bytes:
+        if schema is None:
+            return b""
+        return json.dumps(
+            schema.model_json_schema(),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
 
     @staticmethod
     def _microusd(cost_usd: float) -> int:
