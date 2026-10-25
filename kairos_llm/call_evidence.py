@@ -16,6 +16,7 @@ import json
 import os
 import re
 import stat
+import sys
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -289,6 +290,8 @@ class CreateOnlyDirectorySink:
             raise ValueError("evidence session directory identity changed")
 
     def _create_windows_directory(self) -> None:
+        if sys.platform != "win32":
+            raise OSError("protected Windows evidence creation requires Windows")
         import ctypes
         from ctypes import wintypes
 
@@ -325,6 +328,8 @@ class CreateOnlyDirectorySink:
             kernel.LocalFree(descriptor)
 
     def _create_windows_file(self, path: Path, record: bytes) -> None:
+        if sys.platform != "win32":
+            raise OSError("protected Windows evidence creation requires Windows")
         import ctypes
         from ctypes import wintypes
 

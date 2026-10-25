@@ -296,7 +296,7 @@ python -m uv build --no-sources
 ```
 
 Part of the [Kairos](https://github.com/Kairos-cryptoAI/kairos) system. MIT licensed.
-# Optional application-call evidence
+## Optional application-call evidence
 
 An explicitly supplied `LLMCallEvidenceSink` on `BudgetedLLMGateway` retains one
 create-only `started` record after a durable reservation and before the provider
@@ -325,4 +325,3 @@ budget reset is added. Partial files remain conflicts, not accepted records.
 This hook is not a registered LIVE input producer or a trading/alpha approval.
 Actual native source receipts, joined route/context/review evidence and
 independent deployment qualification remain necessary.
-
