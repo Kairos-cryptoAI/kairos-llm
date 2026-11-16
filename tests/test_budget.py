@@ -81,7 +81,7 @@ async def test_reserves_before_call_and_commits_rounded_actual_cost():
     assert len(underlying.calls) == 1
     reservation = budget.reservations[0]
     assert reservation["provider"] == Provider.OPENAI.value
-    assert reservation["monthly_budget_microusd"] == 12_000_000
+    assert reservation["monthly_budget_microusd"] == 40_000_000
     assert reservation["reservation_id"].startswith("kairos-llm-v1:openai:")
     assert result.budget_reservation_id == reservation["reservation_id"]
     assert result.attempt_started_at_ts_ms is not None
@@ -209,7 +209,7 @@ def test_registered_caps_and_single_attempt_are_not_configurable_upward():
             _Budget(),
             monthly_budgets_microusd={
                 **REGISTERED_PROVIDER_BUDGETS_MICROUSD,
-                Provider.OPENAI: 12_000_001,
+                Provider.OPENAI: 40_000_001,
             },
         )
     with pytest.raises(ValueError, match="exact provider set"):
