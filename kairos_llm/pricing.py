@@ -57,6 +57,13 @@ GPT61_SOL_PRICE = ModelPrice(
     output_per_m=10.00,
     cache_write_per_m=2.50,
 )
+# GPT-6.2 Sol (2026-11): same Standard short-context rates as GPT-6.1 Sol.
+GPT62_SOL_PRICE = ModelPrice(
+    input_per_m=2.00,
+    cached_input_per_m=0.10,
+    output_per_m=10.00,
+    cache_write_per_m=2.50,
+)
 # Preserve the public constant and conservative unknown-model fallback.
 GPT56_PRICE = GPT56_SOL_PRICE
 DEFAULT_PRICE = GPT56_SOL_PRICE
@@ -71,6 +78,7 @@ DEFAULT_PRICES: dict[str, ModelPrice] = {
     "gpt-6-luna": GPT6_LUNA_PRICE,
     "gpt-6-sol": GPT6_SOL_PRICE,
     "gpt-6.1-sol": GPT61_SOL_PRICE,
+    "gpt-6.2-sol": GPT62_SOL_PRICE,
     "gpt-5.6-luna": GPT56_LUNA_PRICE,
     "gpt-5.6-terra": GPT56_TERRA_PRICE,
     "gpt-5.6": GPT56_SOL_PRICE,

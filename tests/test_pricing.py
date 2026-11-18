@@ -26,6 +26,7 @@ def test_gpt56_tier_prices(model, input_cost, cached_cost, output_cost):
         ("gpt-6-luna", 0.10, 0.01, 0.125, 0.50),
         ("gpt-6-sol", 2.00, 0.20, 2.50, 10.00),
         ("gpt-6.1-sol", 2.00, 0.10, 2.50, 10.00),
+        ("gpt-6.2-sol", 2.00, 0.10, 2.50, 10.00),
     ],
 )
 def test_gpt6_tier_prices_include_cache_writes(model, input_cost, cached_cost, write_cost, output_cost):
